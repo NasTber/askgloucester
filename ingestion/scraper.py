@@ -1,10 +1,23 @@
 """Scrape Gloucester MA meeting documents and upload them to Azure Blob Storage.
 
-Pulls agendas and minutes from the city's CivicPlus AgendaCenter using the
-civic-scraper library, then streams each PDF into the ``raw-documents`` blob
-container. Every blob is tagged with ``meeting_body``, ``document_date`` and
-``document_type`` metadata so downstream stages can carry provenance through
-to the search index.
+Gloucester publishes agendas and minutes through a CivicPlus "Archive Center"
+(``Archive.aspx``) rather than the AgendaCenter that civic-scraper understands,
+so this module talks to that system directly:
+
+    1. fetch ``Archive.aspx?AMID={amid}`` (one AMID per document collection),
+    2. parse the listing of archived documents — each is an ``<a>`` link whose
+       href is ``Archive.aspx?ADID={ADID}`` and whose visible text begins with
+       the document's date (e.g. "June 3, 2025 School Committee Meeting"),
+    3. filter the documents to the requested ``[start_date, end_date]`` window,
+    4. download each PDF straight from
+       ``ArchiveCenter/ViewFile/Item/{ADID}``, and
+    5. stream it into the ``raw-documents`` blob container, tagged with
+       ``meeting_body``, ``document_date`` and ``document_type`` metadata so
+       downstream stages can carry provenance through to the search index.
+
+Each AMID maps to a single committee + document type (see ``ARCHIVE_SOURCES``).
+By default we ingest School Committee agendas (AMID 113) and minutes (AMID 114);
+pass ``amid_list`` to add other committees as their AMIDs are discovered.
 
 Authentication to Azure uses ``DefaultAzureCredential`` — no account keys.
 """
@@ -14,28 +27,54 @@ from __future__ import annotations
 import argparse
 import logging
 import os
+import re
 from dataclasses import dataclass
+from datetime import date, datetime
+from html.parser import HTMLParser
 from typing import Iterable
 
 import requests
 from azure.identity import DefaultAzureCredential
 from azure.storage.blob import BlobServiceClient, ContentSettings
-from civic_scraper.platforms import CivicPlusSite
 from dotenv import load_dotenv
 
 load_dotenv()
 
 logger = logging.getLogger(__name__)
 
-# Default CivicPlus AgendaCenter for Gloucester, MA.
-AGENDA_CENTER_URL = os.environ.get(
-    "AGENDA_CENTER_URL", "https://www.gloucester-ma.gov/AgendaCenter"
-)
+# Base host for Gloucester's CivicPlus site. Both the archive listing pages and
+# the file download endpoint live here.
+ARCHIVE_BASE_URL = os.environ.get("ARCHIVE_BASE_URL", "https://gloucester-ma.gov")
 RAW_DOCUMENTS_CONTAINER = os.environ.get("RAW_DOCUMENTS_CONTAINER", "raw-documents")
 
-# We only ingest agendas and minutes; AgendaCenter also exposes other asset
-# types (e.g. captioned media) that are not useful for text extraction.
-SUPPORTED_ASSET_TYPES = ("agenda", "minutes")
+# Map each Archive Center AMID to the committee it belongs to and the kind of
+# document it holds. Add new committees here (and to DEFAULT_AMID_LIST below, or
+# pass them via the ``amid_list`` argument) as their AMIDs are discovered.
+ARCHIVE_SOURCES: dict[int, tuple[str, str]] = {
+    113: ("School Committee", "agenda"),
+    114: ("School Committee", "minutes"),
+}
+
+# Out of the box, ingest School Committee agendas and minutes only, to keep the
+# initial test set small.
+DEFAULT_AMID_LIST: tuple[int, ...] = (113, 114)
+
+# Some CivicPlus deployments reject requests without a browser-like User-Agent,
+# returning an interstitial or 403 instead of the archive listing. Present one.
+BROWSER_USER_AGENT = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+)
+
+# Each archived document is an anchor whose href is "Archive.aspx?ADID={ADID}".
+# Capture the ADID.
+_ARCHIVE_LINK_RE = re.compile(r"Archive\.aspx\?ADID=(\d+)", re.I)
+
+# Date formats seen at the start of the link text, e.g. "June 3, 2025" or
+# "06/03/2025". The comma may be followed by no space ("August 29,2022"), so the
+# space after it is optional.
+_TEXTUAL_DATE_RE = re.compile(r"([A-Za-z]{3,9}\.?\s+\d{1,2},?\s*\d{4})")
+_NUMERIC_DATE_RE = re.compile(r"(\d{1,2}/\d{1,2}/\d{4})")
 
 
 @dataclass
@@ -49,9 +88,54 @@ class UploadedDocument:
     document_type: str  # "agenda" or "minutes"
 
 
+@dataclass
+class ArchiveEntry:
+    """One archived document parsed out of an Archive.aspx listing."""
+
+    adid: int
+    document_date: date
+    title: str
+
+
+class _ArchiveLinkParser(HTMLParser):
+    """Collect ``(adid, text)`` pairs for every archived-document link.
+
+    Each document in an Archive.aspx listing is an ``<a>`` whose href is
+    ``Archive.aspx?ADID={ADID}`` and whose visible text begins with the
+    document's date. We gather the ADID and the anchor text for every such link.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._adid: int | None = None
+        self._text_parts: list[str] = []
+        self.links: list[tuple[int, str]] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag == "a":
+            href = dict(attrs).get("href") or ""
+            match = _ARCHIVE_LINK_RE.search(href)
+            if match:
+                self._adid = int(match.group(1))
+                self._text_parts = []
+
+    def handle_data(self, data: str) -> None:
+        if self._adid is not None:
+            self._text_parts.append(data)
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag == "a" and self._adid is not None:
+            # Collapse runs of whitespace so date parsing sees a clean string.
+            text = " ".join("".join(self._text_parts).split())
+            self.links.append((self._adid, text))
+            self._adid = None
+
+
 def _blob_service_client() -> BlobServiceClient:
     account = os.environ["AZURE_STORAGE_ACCOUNT_NAME"]
     account_url = f"https://{account}.blob.core.windows.net"
+    # DefaultAzureCredential resolves managed identity in Azure and developer
+    # credentials locally — never an account key.
     return BlobServiceClient(account_url, credential=DefaultAzureCredential())
 
 
@@ -60,53 +144,107 @@ def _sanitize(value: str) -> str:
     return "".join(c if c.isalnum() or c in "-_" else "-" for c in value).strip("-")
 
 
-def _matches(asset, meeting_body: str | None, asset_types: Iterable[str]) -> bool:
-    """Return True if an asset is a PDF we want to ingest."""
-    if asset.asset_type not in set(asset_types):
-        return False
-    # Restrict to a single committee for the initial small test set.
-    if meeting_body and (asset.committee_name or "").strip().lower() != meeting_body.lower():
-        return False
-    # AgendaCenter assets are PDFs; guard against anything else.
-    content_type = (asset.content_type or "").lower()
-    url = (asset.url or "").lower()
-    return "pdf" in content_type or url.endswith(".pdf")
+def _parse_document_date(text: str) -> date | None:
+    """Extract a calendar date from a document link's visible text.
+
+    Handles both textual ("June 3, 2025") and numeric ("06/03/2025") forms and
+    a couple of common abbreviation styles. Returns ``None`` when no date can be
+    found so the caller can skip the entry.
+    """
+    match = _TEXTUAL_DATE_RE.search(text)
+    if match:
+        # Normalize separators ("." / ",") to spaces and collapse whitespace so
+        # both "June 3, 2025" and "August 29,2022" reduce to "Month D YYYY".
+        candidate = " ".join(re.sub(r"[.,]", " ", match.group(1)).split())
+        for fmt in ("%B %d %Y", "%b %d %Y"):
+            try:
+                return datetime.strptime(candidate, fmt).date()
+            except ValueError:
+                continue
+
+    match = _NUMERIC_DATE_RE.search(text)
+    if match:
+        try:
+            return datetime.strptime(match.group(1), "%m/%d/%Y").date()
+        except ValueError:
+            pass
+
+    return None
+
+
+def _fetch_archive_entries(
+    session: requests.Session, amid: int
+) -> list[ArchiveEntry]:
+    """Fetch and parse one Archive.aspx page into a list of archive entries."""
+    url = f"{ARCHIVE_BASE_URL}/Archive.aspx?AMID={amid}"
+    response = session.get(url, timeout=60)
+    response.raise_for_status()
+
+    parser = _ArchiveLinkParser()
+    parser.feed(response.text)
+
+    entries: list[ArchiveEntry] = []
+    seen_adids: set[int] = set()
+    for adid, text in parser.links:
+        if adid in seen_adids:
+            continue  # the same document can be linked more than once
+        seen_adids.add(adid)
+
+        document_date = _parse_document_date(text)
+        if document_date is None:
+            # Some entries have no usable date (e.g. "Superintendent Search").
+            logger.debug("Skipping AMID %s link with no parseable date: %r", amid, text)
+            continue
+
+        entries.append(
+            ArchiveEntry(adid=adid, document_date=document_date, title=text)
+        )
+
+    logger.info("AMID %s: parsed %d archived document(s)", amid, len(entries))
+    return entries
 
 
 def scrape_and_upload(
     start_date: str,
     end_date: str,
-    meeting_body: str | None = "School Committee",
-    asset_types: Iterable[str] = SUPPORTED_ASSET_TYPES,
-    agenda_center_url: str = AGENDA_CENTER_URL,
+    amid_list: Iterable[int] = DEFAULT_AMID_LIST,
+    meeting_body: str | None = None,
 ) -> list[UploadedDocument]:
-    """Scrape AgendaCenter and upload matching PDFs to blob storage.
+    """Scrape Archive.aspx collections and upload matching PDFs to blob storage.
 
     Args:
         start_date: Inclusive start date, ``YYYY-MM-DD``.
         end_date: Inclusive end date, ``YYYY-MM-DD``.
-        meeting_body: Committee name to filter on (case-insensitive). Pass
-            ``None`` to ingest every committee. Defaults to "School Committee"
-            to keep the initial test set small.
-        asset_types: Which asset types to keep (default: agendas + minutes).
-        agenda_center_url: Base AgendaCenter URL to scrape.
+        amid_list: Archive Center AMIDs to scrape. Defaults to School Committee
+            agendas (113) and minutes (114). Each AMID must be present in
+            :data:`ARCHIVE_SOURCES`.
+        meeting_body: Optional committee filter (case-insensitive). When given,
+            only AMIDs whose committee matches are scraped — handy for narrowing
+            a broader ``amid_list`` down to a single body.
 
     Returns:
         A list of :class:`UploadedDocument` records, one per uploaded blob.
     """
+    window_start = datetime.strptime(start_date, "%Y-%m-%d").date()
+    window_end = datetime.strptime(end_date, "%Y-%m-%d").date()
+
+    # Resolve the AMIDs to scrape, validating each and applying the optional
+    # meeting_body filter.
+    amids: list[int] = []
+    for amid in amid_list:
+        if amid not in ARCHIVE_SOURCES:
+            logger.warning("Skipping unknown AMID %s (not in ARCHIVE_SOURCES)", amid)
+            continue
+        body, _ = ARCHIVE_SOURCES[amid]
+        if meeting_body and body.lower() != meeting_body.lower():
+            continue
+        amids.append(amid)
+
     logger.info(
-        "Scraping %s for %s documents from %s to %s",
-        agenda_center_url,
-        meeting_body or "all bodies",
+        "Scraping AMIDs %s from %s to %s",
+        amids,
         start_date,
         end_date,
-    )
-
-    site = CivicPlusSite(agenda_center_url)
-    assets = site.scrape(
-        start_date=start_date,
-        end_date=end_date,
-        asset_list=list(asset_types),
     )
 
     container = _blob_service_client().get_container_client(RAW_DOCUMENTS_CONTAINER)
@@ -117,55 +255,71 @@ def scrape_and_upload(
     except Exception:  # noqa: BLE001 - "already exists" is the common case
         pass
 
+    # Reuse one session (and its browser User-Agent) for every request.
     session = requests.Session()
+    session.headers.update({"User-Agent": BROWSER_USER_AGENT})
+
     uploaded: list[UploadedDocument] = []
 
-    for asset in assets:
-        if not _matches(asset, meeting_body, asset_types):
-            continue
-
-        document_date = (
-            asset.meeting_date.strftime("%Y-%m-%d") if asset.meeting_date else "unknown"
-        )
-        body = (asset.committee_name or meeting_body or "unknown").strip()
-
-        blob_name = (
-            f"{_sanitize(body)}/{document_date}/"
-            f"{asset.meeting_id or _sanitize(asset.asset_name or 'doc')}_{asset.asset_type}.pdf"
-        )
+    for amid in amids:
+        body, document_type = ARCHIVE_SOURCES[amid]
 
         try:
-            response = session.get(asset.url, allow_redirects=True, timeout=60)
-            response.raise_for_status()
+            entries = _fetch_archive_entries(session, amid)
         except requests.RequestException as exc:
-            logger.warning("Failed to download %s: %s", asset.url, exc)
+            logger.warning("Failed to fetch Archive.aspx for AMID %s: %s", amid, exc)
             continue
 
-        metadata = {
-            "meeting_body": body,
-            "document_date": document_date,
-            "document_type": asset.asset_type,
-            "source_url": asset.url,
-        }
+        for entry in entries:
+            # Filter to the requested date window (inclusive).
+            if not (window_start <= entry.document_date <= window_end):
+                continue
 
-        container.upload_blob(
-            name=blob_name,
-            data=response.content,
-            overwrite=True,
-            metadata=metadata,
-            content_settings=ContentSettings(content_type="application/pdf"),
-        )
-        logger.info("Uploaded %s (%d bytes)", blob_name, len(response.content))
+            document_date = entry.document_date.strftime("%Y-%m-%d")
+            # The PDF is downloaded directly from the ViewFile endpoint by ADID.
+            source_url = f"{ARCHIVE_BASE_URL}/ArchiveCenter/ViewFile/Item/{entry.adid}"
 
-        uploaded.append(
-            UploadedDocument(
-                blob_name=blob_name,
-                source_url=asset.url,
-                meeting_body=body,
-                document_date=document_date,
-                document_type=asset.asset_type,
+            blob_name = (
+                f"{_sanitize(body)}/{document_date}/{entry.adid}_{document_type}.pdf"
             )
-        )
+
+            try:
+                response = session.get(source_url, allow_redirects=True, timeout=60)
+                response.raise_for_status()
+            except requests.RequestException as exc:
+                logger.warning("Failed to download %s: %s", source_url, exc)
+                continue
+
+            metadata = {
+                "meeting_body": body,
+                "document_date": document_date,
+                "document_type": document_type,
+                "source_url": source_url,
+                # The full listing title (e.g. "March 12, 2025 School Committee
+                # Meeting") names the specific meeting, which the AMID-level
+                # meeting_body cannot. Azure blob metadata must be ASCII, so drop
+                # any stray non-ASCII characters (e.g. curly quotes).
+                "title": entry.title.encode("ascii", "ignore").decode("ascii"),
+            }
+
+            container.upload_blob(
+                name=blob_name,
+                data=response.content,
+                overwrite=True,
+                metadata=metadata,
+                content_settings=ContentSettings(content_type="application/pdf"),
+            )
+            logger.info("Uploaded %s (%d bytes)", blob_name, len(response.content))
+
+            uploaded.append(
+                UploadedDocument(
+                    blob_name=blob_name,
+                    source_url=source_url,
+                    meeting_body=body,
+                    document_date=document_date,
+                    document_type=document_type,
+                )
+            )
 
     logger.info("Uploaded %d documents", len(uploaded))
     return uploaded
@@ -173,11 +327,19 @@ def scrape_and_upload(
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
-    parser = argparse.ArgumentParser(description="Scrape AgendaCenter PDFs to blob storage.")
+    parser = argparse.ArgumentParser(description="Scrape Archive.aspx PDFs to blob storage.")
     parser.add_argument("--start-date", required=True)
     parser.add_argument("--end-date", required=True)
-    parser.add_argument("--meeting-body", default="School Committee")
+    parser.add_argument(
+        "--amid",
+        type=int,
+        action="append",
+        dest="amids",
+        help="Archive Center AMID to scrape (repeatable). "
+        "Defaults to 113 (agendas) and 114 (minutes).",
+    )
     args = parser.parse_args()
 
-    for doc in scrape_and_upload(args.start_date, args.end_date, args.meeting_body):
+    amid_list = args.amids if args.amids else DEFAULT_AMID_LIST
+    for doc in scrape_and_upload(args.start_date, args.end_date, amid_list=amid_list):
         print(doc.blob_name)
