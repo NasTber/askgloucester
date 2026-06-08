@@ -19,10 +19,18 @@ from azure.identity import DefaultAzureCredential
 from azure.search.documents import SearchClient
 from azure.search.documents.indexes import SearchIndexClient
 from azure.search.documents.indexes.models import (
+    HnswAlgorithmConfiguration,
     SearchableField,
+    SearchField,
     SearchFieldDataType,
     SearchIndex,
+    SemanticConfiguration,
+    SemanticField,
+    SemanticPrioritizedFields,
+    SemanticSearch,
     SimpleField,
+    VectorSearch,
+    VectorSearchProfile,
 )
 from dotenv import load_dotenv
 
@@ -34,6 +42,13 @@ SEARCH_INDEX_NAME = os.environ.get("AZURE_SEARCH_INDEX_NAME", "meeting-documents
 
 # Azure AI Search caps a single indexing batch at 1000 documents.
 DEFAULT_BATCH_SIZE = 1000
+
+# Names tying the vector field to its algorithm/profile and the semantic
+# ranking config together. text-embedding-3-small produces 1536-dim vectors.
+VECTOR_DIMENSIONS = 1536
+HNSW_CONFIG_NAME = "hnsw-config"
+VECTOR_PROFILE_NAME = "vector-profile"
+SEMANTIC_CONFIG_NAME = "semantic-config"
 
 
 def _search_endpoint() -> str:
@@ -95,19 +110,67 @@ def _build_index(index_name: str) -> SearchIndex:
             type=SearchFieldDataType.String,
             filterable=True,
         ),
+        # Vector field holding the chunk's embedding. It's searchable (via the
+        # vector profile) but not retrievable to keep result payloads small.
+        SearchField(
+            name="content_vector",
+            type=SearchFieldDataType.Collection(SearchFieldDataType.Single),
+            searchable=True,
+            retrievable=False,
+            vector_search_dimensions=VECTOR_DIMENSIONS,
+            vector_search_profile_name=VECTOR_PROFILE_NAME,
+        ),
     ]
-    return SearchIndex(name=index_name, fields=fields)
+
+    # Vector search: an HNSW algorithm config referenced by a profile, which
+    # the content_vector field points at.
+    vector_search = VectorSearch(
+        algorithms=[HnswAlgorithmConfiguration(name=HNSW_CONFIG_NAME)],
+        profiles=[
+            VectorSearchProfile(
+                name=VECTOR_PROFILE_NAME,
+                algorithm_configuration_name=HNSW_CONFIG_NAME,
+            )
+        ],
+    )
+
+    # Semantic ranking over the chunk text, for hybrid keyword+vector queries.
+    semantic_search = SemanticSearch(
+        configurations=[
+            SemanticConfiguration(
+                name=SEMANTIC_CONFIG_NAME,
+                prioritized_fields=SemanticPrioritizedFields(
+                    content_fields=[SemanticField(field_name="content")],
+                ),
+            )
+        ]
+    )
+
+    return SearchIndex(
+        name=index_name,
+        fields=fields,
+        vector_search=vector_search,
+        semantic_search=semantic_search,
+    )
 
 
 def ensure_index(index_name: str = SEARCH_INDEX_NAME) -> None:
-    """Create the index if it doesn't exist, or update it to match the schema."""
+    """(Re)create the index so it matches the current schema.
+
+    Adding the ``content_vector`` field, vector search and semantic configs is
+    not an in-place-updatable schema change, so we delete any existing index
+    and recreate it from scratch. This drops previously indexed documents — the
+    pipeline re-uploads them after this runs.
+    """
     client = SearchIndexClient(_search_endpoint(), credential=_credential())
     index = _build_index(index_name)
     try:
         client.get_index(index_name)
-        logger.info("Updating existing index '%s'", index_name)
+        logger.info("Deleting existing index '%s' to apply schema change", index_name)
+        client.delete_index(index_name)
     except ResourceNotFoundError:
-        logger.info("Creating index '%s'", index_name)
+        logger.info("No existing index '%s'", index_name)
+    logger.info("Creating index '%s'", index_name)
     client.create_or_update_index(index)
 
 

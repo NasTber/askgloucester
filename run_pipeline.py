@@ -5,7 +5,8 @@ Ties the four ingestion stages together end to end:
     1. scrape AgendaCenter PDFs and upload them to blob storage
     2. extract text from each PDF with Document Intelligence
     3. chunk the text into ~500-token segments with overlap
-    4. index the chunks into Azure AI Search
+    4. embed each chunk with Azure OpenAI (text-embedding-3-small)
+    5. index the chunks into Azure AI Search
 
 Run it over a date window, e.g.::
 
@@ -28,6 +29,7 @@ from dotenv import load_dotenv
 sys.path.insert(0, "ingestion")
 
 import chunker  # noqa: E402
+import embedder  # noqa: E402
 import indexer  # noqa: E402
 import processor  # noqa: E402
 import scraper  # noqa: E402
@@ -76,7 +78,10 @@ def run(start_date: str, end_date: str, meeting_body: str | None) -> int:
         logger.info("%s -> %d chunk(s)", doc.blob_name, len(chunks))
         all_chunks.extend(chunks)
 
-    # 4. Index everything in batches.
+    # 4. Embed each chunk's text so it can be vector-searched.
+    embedder.embed_chunks(all_chunks)
+
+    # 5. Index everything in batches.
     indexed = indexer.upload_chunks(all_chunks)
     logger.info(
         "Pipeline complete: %d document(s), %d chunk(s), %d indexed.",

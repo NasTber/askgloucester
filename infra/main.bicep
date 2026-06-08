@@ -18,6 +18,7 @@ var keyVaultName = 'kv-askgloucester-${environmentName}'
 var storageAccountName = 'stakgloucester${environmentName}'
 var searchName = 'srch-askgloucester-${environmentName}'
 var documentIntelligenceName = 'docintel-askgloucester-${environmentName}'
+var openAiName = 'openai-askgloucester-${environmentName}'
 
 module identity 'modules/identity.bicep' = {
   name: 'identity'
@@ -63,6 +64,15 @@ module documentIntelligence 'modules/document-intelligence.bicep' = {
   }
 }
 
+module openAi 'modules/openai.bicep' = {
+  name: 'openai'
+  params: {
+    name: openAiName
+    location: location
+    principalId: identity.outputs.principalId
+  }
+}
+
 // --- Outputs ---
 
 @description('Managed identity name.')
@@ -100,3 +110,12 @@ output documentIntelligenceName string = documentIntelligence.outputs.name
 
 @description('Document Intelligence endpoint.')
 output documentIntelligenceEndpoint string = documentIntelligence.outputs.endpoint
+
+@description('Azure OpenAI account name.')
+output openAiName string = openAi.outputs.name
+
+@description('Azure OpenAI endpoint.')
+output openAiEndpoint string = openAi.outputs.endpoint
+
+@description('Azure OpenAI embedding deployment name.')
+output openAiEmbeddingDeployment string = openAi.outputs.embeddingDeploymentName

@@ -11,7 +11,7 @@ Token counts use tiktoken's ``cl100k_base`` encoding.
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 
 import tiktoken
 
@@ -35,6 +35,10 @@ class Chunk:
     document_type: str
     page_number: int
     chunk_id: str
+    # Embedding of ``content`` produced by :mod:`embedder` (1536-dim,
+    # text-embedding-3-small). Empty until the embedding step runs; an empty
+    # list is a valid value for Azure AI Search's nullable vector field.
+    content_vector: list[float] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         return asdict(self)
