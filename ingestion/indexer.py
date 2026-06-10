@@ -1,6 +1,6 @@
 """Create/update the Azure AI Search index and upload document chunks.
 
-Defines the ``meeting-documents`` index schema and provides a batched upload
+Defines the ``gloucester-documents`` index schema and provides a batched upload
 path for chunks produced by :mod:`chunker`. The schema makes every text field
 keyword-searchable and makes the key/metadata fields filterable so the API
 layer can scope queries by meeting body, document type or date.
@@ -38,7 +38,7 @@ load_dotenv()
 
 logger = logging.getLogger(__name__)
 
-SEARCH_INDEX_NAME = os.environ.get("AZURE_SEARCH_INDEX_NAME", "meeting-documents")
+SEARCH_INDEX_NAME = os.environ.get("AZURE_SEARCH_INDEX_NAME", "gloucester-documents")
 
 # Azure AI Search caps a single indexing batch at 1000 documents.
 DEFAULT_BATCH_SIZE = 1000
