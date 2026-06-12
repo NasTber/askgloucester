@@ -153,6 +153,16 @@ INDEX_HTML = """\
     }
     header h1 { font-size: 1.4rem; color: var(--accent); }
     header p  { font-size: 0.88rem; color: var(--muted); margin-top: 0.1rem; }
+    .beta {
+      display: inline-block;
+      margin-top: 0.4rem;
+      font-size: 0.78rem;
+      color: #fff;
+      background: var(--accent);
+      padding: 0.15rem 0.5rem;
+      border-radius: 4px;
+      letter-spacing: 0.03em;
+    }
     #thread {
       flex: 1 1 0; overflow-y: auto; padding: 1.25rem;
       display: flex; flex-direction: column; gap: 1rem;
@@ -239,6 +249,8 @@ INDEX_HTML = """\
   <header>
     <h1>AskGloucester</h1>
     <p>Ask questions about Gloucester, MA public meetings</p>
+    <p class="beta">Beta · School Committee & City Council meetings only ·
+  Answers may be incomplete</p>
   </header>
 
   <div id="thread">
