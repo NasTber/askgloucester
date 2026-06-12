@@ -372,7 +372,20 @@ def ask(question: str, history: list[dict] | None = None) -> tuple[str, list[tup
     that case.
     """
     body = detect_body(question)
-    vector = embed(question)
+    # When follow-up questions use pronouns or elliptical references
+    # ("that meeting", "who proposed it"), the retrieval query is
+    # enriched with the last user turn from history so the embedding
+    # lands near the right documents. The original question is still
+    # passed to answer() so the model sees the clean follow-up.
+    retrieval_question = question
+    if history:
+        last_user = next(
+            (m["content"] for m in reversed(history) if m["role"] == "user"),
+            None,
+        )
+        if last_user:
+            retrieval_question = f"{last_user} {question}"
+    vector = embed(retrieval_question)
 
     # "Latest meeting" path: only when a body is detected AND the question uses a
     # recency phrase. Pin retrieval to that body's newest past minutes so every
@@ -386,16 +399,16 @@ def ask(question: str, history: list[dict] | None = None) -> tuple[str, list[tup
             # Pin to the full committee meeting so a subcommittee/negotiations
             # session dated the same day can't leak in as "the last meeting".
             chunks = retrieve(
-                question,
+                retrieval_question,
                 vector,
                 meeting_body=body,
                 date_eq=latest_date,
                 meeting_category="full_committee",
             )
         else:
-            chunks = retrieve(question, vector, meeting_body=body)
+            chunks = retrieve(retrieval_question, vector, meeting_body=body)
     else:
-        chunks = retrieve(question, vector, meeting_body=body)
+        chunks = retrieve(retrieval_question, vector, meeting_body=body)
 
     if not chunks:
         if body:
