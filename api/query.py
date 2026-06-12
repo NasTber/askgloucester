@@ -371,20 +371,30 @@ def ask(question: str, history: list[dict] | None = None) -> tuple[str, list[tup
     answer is a decline (no LLM call was made), which callers use to detect
     that case.
     """
+    # The last user turn from history feeds two follow-up fixes below: meeting-
+    # body detection and retrieval-query enrichment. Compute it once.
+    last_user = None
+    if history:
+        last_user = next(
+            (m["content"] for m in reversed(history) if m["role"] == "user"),
+            None,
+        )
+
     body = detect_body(question)
+    # A follow-up may not re-name the body the conversation is about
+    # ("what about the budget?"). Fall back to detecting it from the last
+    # user turn so retrieval stays scoped to the right body.
+    if body is None and last_user:
+        body = detect_body(last_user)
+
     # When follow-up questions use pronouns or elliptical references
     # ("that meeting", "who proposed it"), the retrieval query is
     # enriched with the last user turn from history so the embedding
     # lands near the right documents. The original question is still
     # passed to answer() so the model sees the clean follow-up.
     retrieval_question = question
-    if history:
-        last_user = next(
-            (m["content"] for m in reversed(history) if m["role"] == "user"),
-            None,
-        )
-        if last_user:
-            retrieval_question = f"{last_user} {question}"
+    if last_user:
+        retrieval_question = f"{last_user} {question}"
     vector = embed(retrieval_question)
 
     # "Latest meeting" path: only when a body is detected AND the question uses a
