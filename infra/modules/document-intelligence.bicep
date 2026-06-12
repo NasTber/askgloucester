@@ -11,6 +11,9 @@ param location string
 @description('Principal ID of the managed identity to grant access to.')
 param principalId string
 
+@description('Object ID of the GitHub Actions CI/CD service principal to grant access to.')
+param githubActionsSpObjectId string
+
 // Built-in role: Cognitive Services User
 var cognitiveServicesUserRoleId = 'a97b65f3-24c7-4388-baec-2e87135dc908'
 
@@ -37,6 +40,18 @@ resource cognitiveServicesUserAssignment 'Microsoft.Authorization/roleAssignment
   properties: {
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', cognitiveServicesUserRoleId)
     principalId: principalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
+// CI/CD: the GitHub Actions service principal needs to call Document
+// Intelligence so the scheduled ingestion workflow can analyze documents.
+resource githubCognitiveServicesUserAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(documentIntelligence.id, githubActionsSpObjectId, cognitiveServicesUserRoleId)
+  scope: documentIntelligence
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', cognitiveServicesUserRoleId)
+    principalId: githubActionsSpObjectId
     principalType: 'ServicePrincipal'
   }
 }

@@ -1,0 +1,67 @@
+# Scheduled ingestion: scrape + parse + embed + index the current year's
+# Gloucester meeting documents.
+#
+# Runs every Monday at 09:00 UTC, and on demand via workflow_dispatch. Auth is
+# keyless via GitHub OIDC; the GitHub Actions service principal holds the data
+# roles the pipeline needs (Storage Blob Data Contributor, Cognitive Services
+# User on Document Intelligence, Cognitive Services OpenAI User, and the two
+# Search roles) — all granted by main.bicep.
+name: ingest
+
+on:
+  schedule:
+    # Monday 09:00 UTC.
+    - cron: "0 9 * * 1"
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  ingest:
+    runs-on: ubuntu-latest
+
+    # Non-sensitive runtime config (endpoints + names only). Mirrors .env.
+    # Auth uses DefaultAzureCredential against the OIDC login below, so there are
+    # no secrets here. AZURE_OPENAI_ENDPOINT keeps its uniqueString() subdomain.
+    env:
+      AZURE_STORAGE_ACCOUNT_NAME: stakgloucesterdev
+      RAW_DOCUMENTS_CONTAINER: raw-documents
+      AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT: https://docintel-askgloucester-dev.cognitiveservices.azure.com/
+      AZURE_SEARCH_ENDPOINT: https://srch-askgloucester-dev.search.windows.net
+      AZURE_SEARCH_INDEX_NAME: gloucester-documents
+      AZURE_OPENAI_ENDPOINT: https://aoai-askgloucester-dev-7c8ac.openai.azure.com/
+      AZURE_OPENAI_EMBEDDING_DEPLOYMENT: text-embedding-3-small
+      AZURE_OPENAI_CHAT_DEPLOYMENT: gpt-4.1-mini
+      AZURE_OPENAI_API_VERSION: 2024-10-21
+      ARCHIVE_BASE_URL: https://gloucester-ma.gov
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Azure login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r ingestion/requirements.txt
+
+      # Ingest the full current-year window. `date +%Y` makes the range roll over
+      # automatically each January with no edit to this workflow. --meeting-body
+      # all ingests every committee, not just the School Committee default.
+      - name: Run ingestion pipeline
+        run: |
+          python run_pipeline.py \
+            --start-date "$(date +%Y)-01-01" \
+            --end-date "$(date +%Y)-12-31" \
+            --meeting-body all

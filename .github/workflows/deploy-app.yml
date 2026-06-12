@@ -1,0 +1,75 @@
+# Build the AskGloucester API image and roll the Container App to it.
+#
+# Triggers only when the app's build inputs change (the API/ingestion source,
+# the Dockerfile, or the .dockerignore). Auth is keyless via GitHub OIDC ->
+# Azure federated credential; the GitHub Actions service principal holds AcrPush
+# on the registry and Contributor on the Container App (granted by main.bicep).
+name: deploy-app
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - api/**
+      - ingestion/**
+      - Dockerfile
+      - .dockerignore
+
+# Required for azure/login's OIDC token exchange.
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  ACR_NAME: acraskgloucesterdev
+  ACR_LOGIN_SERVER: acraskgloucesterdev.azurecr.io
+  IMAGE_REPO: askgloucester-api
+  RESOURCE_GROUP: rg-askgloucester-dev
+  CONTAINER_APP: ca-askgloucester-dev
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Keyless login via OIDC. No client secret — the federated credential on
+      # the app registration trusts this repo's GitHub OIDC token.
+      - name: Azure login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      # `az acr login` mints an ACR refresh token from the AAD identity, so the
+      # subsequent docker push authenticates via the SP's AcrPush role — no
+      # registry admin credentials.
+      - name: ACR login
+        run: az acr login --name "$ACR_NAME"
+
+      # IMPORTANT: --platform linux/amd64. Azure Container Apps runs AMD64;
+      # building without this on an ARM runner would produce an unrunnable image.
+      # (`az acr build` is intentionally NOT used — it is blocked on this
+      # subscription with TasksOperationsNotAllowed.)
+      - name: Build image
+        run: |
+          docker build --platform linux/amd64 \
+            -t "$ACR_LOGIN_SERVER/$IMAGE_REPO:${{ github.sha }}" \
+            -t "$ACR_LOGIN_SERVER/$IMAGE_REPO:latest" \
+            .
+
+      - name: Push image
+        run: |
+          docker push "$ACR_LOGIN_SERVER/$IMAGE_REPO:${{ github.sha }}"
+          docker push "$ACR_LOGIN_SERVER/$IMAGE_REPO:latest"
+
+      # Roll the Container App to the immutable per-commit tag (not :latest) so
+      # the revision is pinned to exactly this build.
+      - name: Update Container App
+        run: |
+          az containerapp update \
+            --name "$CONTAINER_APP" \
+            --resource-group "$RESOURCE_GROUP" \
+            --image "$ACR_LOGIN_SERVER/$IMAGE_REPO:${{ github.sha }}"

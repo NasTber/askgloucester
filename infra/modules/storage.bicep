@@ -11,6 +11,9 @@ param location string
 @description('Principal ID of the managed identity to grant access to.')
 param principalId string
 
+@description('Object ID of the GitHub Actions CI/CD service principal to grant access to.')
+param githubActionsSpObjectId string
+
 @description('Name of the blob container to create.')
 param containerName string = 'raw-documents'
 
@@ -52,6 +55,18 @@ resource blobDataContributorAssignment 'Microsoft.Authorization/roleAssignments@
   properties: {
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', blobDataContributorRoleId)
     principalId: principalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
+// CI/CD: the GitHub Actions service principal also needs blob data access so the
+// scheduled ingestion workflow can write raw documents to the container.
+resource githubBlobDataContributorAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(storageAccount.id, githubActionsSpObjectId, blobDataContributorRoleId)
+  scope: storageAccount
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', blobDataContributorRoleId)
+    principalId: githubActionsSpObjectId
     principalType: 'ServicePrincipal'
   }
 }

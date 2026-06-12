@@ -11,6 +11,9 @@ param location string
 @description('Principal ID of the managed identity to grant access to.')
 param principalId string
 
+@description('Object ID of the GitHub Actions CI/CD service principal to grant access to.')
+param githubActionsSpObjectId string
+
 // Built-in roles
 var searchIndexDataContributorRoleId = '8ebe5a00-799e-43f5-93ac-243d3dce84a7'
 var searchServiceContributorRoleId = '7ca78c08-252a-4471-8644-bb5ff32d4ba0'
@@ -27,6 +30,9 @@ resource search 'Microsoft.Search/searchServices@2024-03-01-preview' = {
     hostingMode: 'default'
     publicNetworkAccess: 'enabled'
     disableLocalAuth: true
+    // Pin to the live value so a redeploy doesn't silently flip semantic search
+    // off (the service was provisioned with the free semantic tier).
+    semanticSearch: 'free'
   }
 }
 
@@ -46,6 +52,29 @@ resource serviceContributorAssignment 'Microsoft.Authorization/roleAssignments@2
   properties: {
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', searchServiceContributorRoleId)
     principalId: principalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
+// CI/CD: the GitHub Actions service principal needs the same data + service
+// roles so the scheduled ingestion workflow can create the index and write
+// documents to it.
+resource githubIndexDataContributorAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(search.id, githubActionsSpObjectId, searchIndexDataContributorRoleId)
+  scope: search
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', searchIndexDataContributorRoleId)
+    principalId: githubActionsSpObjectId
+    principalType: 'ServicePrincipal'
+  }
+}
+
+resource githubServiceContributorAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(search.id, githubActionsSpObjectId, searchServiceContributorRoleId)
+  scope: search
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', searchServiceContributorRoleId)
+    principalId: githubActionsSpObjectId
     principalType: 'ServicePrincipal'
   }
 }
