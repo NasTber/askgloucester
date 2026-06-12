@@ -99,6 +99,15 @@ def _build_index(index_name: str) -> SearchIndex:
             filterable=True,
             facetable=True,
         ),
+        # Distinguishes a full committee meeting from a subcommittee or
+        # negotiations session (derived from the title at ingestion). Filterable
+        # only — we scope on it, never full-text search or sort by it.
+        SimpleField(
+            name="meeting_category",
+            type=SearchFieldDataType.String,
+            filterable=True,
+            sortable=False,
+        ),
         SimpleField(
             name="page_number",
             type=SearchFieldDataType.Int32,
@@ -155,23 +164,22 @@ def _build_index(index_name: str) -> SearchIndex:
 
 
 def ensure_index(index_name: str = SEARCH_INDEX_NAME) -> None:
-    """(Re)create the index so it matches the current schema.
+    """Ensure the index exists; create it if it does not.
 
-    Adding the ``content_vector`` field, vector search and semantic configs is
-    not an in-place-updatable schema change, so we delete any existing index
-    and recreate it from scratch. This drops previously indexed documents — the
-    pipeline re-uploads them after this runs.
+    Does NOT delete or wipe existing documents — safe to call before every
+    pipeline run regardless of which meeting body is being ingested. To apply
+    a schema change, delete the index manually first, then re-run the pipeline
+    with --meeting-body all to rebuild from scratch.
     """
     client = SearchIndexClient(_search_endpoint(), credential=_credential())
-    index = _build_index(index_name)
     try:
         client.get_index(index_name)
-        logger.info("Deleting existing index '%s' to apply schema change", index_name)
-        client.delete_index(index_name)
+        logger.info("Index '%s' already exists — skipping creation", index_name)
+        return
     except ResourceNotFoundError:
-        logger.info("No existing index '%s'", index_name)
-    logger.info("Creating index '%s'", index_name)
-    client.create_or_update_index(index)
+        logger.info("Creating index '%s'", index_name)
+        index = _build_index(index_name)
+        client.create_or_update_index(index)
 
 
 def upload_chunks(
