@@ -319,7 +319,7 @@ def build_context(chunks: list[dict]) -> str:
     return "\n\n".join(blocks)
 
 
-def answer(question: str, context: str) -> str:
+def answer(question: str, context: str, history: list[dict] | None = None) -> str:
     """Generate a cited answer grounded in the assembled context.
 
     Sends the system grounding contract plus the question and numbered sources
@@ -338,6 +338,7 @@ def answer(question: str, context: str) -> str:
         temperature=0.1,  # low temperature: stay faithful to the sources
         messages=[
             {"role": "system", "content": system_content},
+            *(history or []),
             {"role": "user", "content": user_message},
         ],
     )
@@ -361,7 +362,7 @@ def _format_sources(chunks: list[tuple[int, dict]]) -> str:
     return "\n".join(lines)
 
 
-def ask(question: str) -> tuple[str, list[tuple[int, dict]]]:
+def ask(question: str, history: list[dict] | None = None) -> tuple[str, list[tuple[int, dict]]]:
     """Run one full RAG pass and return (answer_text, source_chunks).
 
     The single source of truth for the query loop, shared by the CLI (main)
@@ -405,7 +406,7 @@ def ask(question: str) -> tuple[str, list[tuple[int, dict]]]:
         return ("No matching documents were found in the index.", [])
 
     context = build_context(chunks)
-    answer_text = answer(question, context)
+    answer_text = answer(question, context, history=history)
     cited_ns = {int(n) for n in re.findall(r'\[(\d+)\]', answer_text)}
     chunks = [(i, c) for i, c in enumerate(chunks, 1) if i in cited_ns]
     return (answer_text, chunks)

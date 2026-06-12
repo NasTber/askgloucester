@@ -17,6 +17,8 @@ Run locally:
 
 from __future__ import annotations
 
+from typing import Literal
+
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
@@ -32,12 +34,19 @@ app = FastAPI(
 )
 
 
+class Message(BaseModel):
+    role: Literal["user", "assistant"]
+    content: str
+
+
 class AskRequest(BaseModel):
     """Body for POST /ask."""
 
     # min_length=1 rejects empty/whitespace-only questions at the edge so we
     # never spend an embedding call on nothing.
     question: str = Field(..., min_length=1, description="The question to ask.")
+    history: list[Message] = Field(default_factory=list,
+        description="Prior turns, alternating user/assistant.")
 
 
 class Source(BaseModel):
@@ -104,7 +113,8 @@ def ask_endpoint(request: AskRequest) -> AskResponse:
     Delegates the whole retrieval-and-generation pass to ``query.ask`` and only
     reshapes its (answer, chunks) tuple into JSON.
     """
-    answer_text, chunks = query.ask(request.question)
+    history = [{"role": m.role, "content": m.content} for m in request.history]
+    answer_text, chunks = query.ask(request.question, history=history or None)
     return AskResponse(
         answer=answer_text,
         sources=[_to_source(c, n) for n, c in chunks],
@@ -125,184 +135,257 @@ INDEX_HTML = """\
   <title>AskGloucester</title>
   <style>
     :root {
-      --ink: #1a2733;
-      --muted: #5c6b7a;
-      --accent: #154d7a;
-      --accent-press: #0f3a5c;
-      --line: #d8e0e6;
-      --bg: #f4f6f8;
+      --ink: #1a2733; --muted: #5c6b7a; --accent: #154d7a;
+      --accent-press: #0f3a5c; --line: #d8e0e6; --bg: #f4f6f8;
       --error: #9b2226;
     }
-    * { box-sizing: border-box; }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { height: 100%; }
     body {
-      margin: 0;
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-      color: var(--ink);
-      background: var(--bg);
-      line-height: 1.55;
+      display: flex; flex-direction: column;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+                   Helvetica, Arial, sans-serif;
+      color: var(--ink); background: var(--bg); line-height: 1.55;
     }
-    main {
-      max-width: 640px;
-      margin: 0 auto;
-      padding: 2.5rem 1.25rem 4rem;
+    header {
+      flex-shrink: 0; padding: 0.9rem 1.25rem;
+      background: #fff; border-bottom: 2px solid var(--accent);
     }
-    header { border-bottom: 2px solid var(--accent); padding-bottom: 1rem; margin-bottom: 1.75rem; }
-    h1 { margin: 0; font-size: 1.9rem; letter-spacing: -0.01em; color: var(--accent); }
-    .subtitle { margin: 0.35rem 0 0; color: var(--muted); font-size: 1rem; }
-    form { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+    header h1 { font-size: 1.4rem; color: var(--accent); }
+    header p  { font-size: 0.88rem; color: var(--muted); margin-top: 0.1rem; }
+    #thread {
+      flex: 1 1 0; overflow-y: auto; padding: 1.25rem;
+      display: flex; flex-direction: column; gap: 1rem;
+      max-width: 700px; width: 100%; margin: 0 auto;
+    }
+    #welcome {
+      margin: auto; text-align: center;
+      color: var(--muted); padding: 2rem; font-size: 0.97rem;
+    }
+    .msg { display: flex; flex-direction: column; max-width: 85%; }
+    .msg.user      { align-self: flex-end;   align-items: flex-end; }
+    .msg.assistant { align-self: flex-start; align-items: flex-start; }
+    .bubble {
+      padding: 0.65rem 0.95rem; border-radius: 14px; font-size: 0.96rem;
+    }
+    .msg.user .bubble {
+      background: var(--accent); color: #fff; border-bottom-right-radius: 3px;
+    }
+    .msg.assistant .bubble {
+      background: #fff; border: 1px solid var(--line);
+      border-bottom-left-radius: 3px; white-space: pre-wrap;
+    }
+    .sources { margin-top: 0.45rem; }
+    .src-toggle {
+      background: none; border: none; cursor: pointer;
+      color: var(--accent); font-size: 0.82rem; padding: 0;
+    }
+    .src-toggle:hover { text-decoration: underline; }
+    .src-list {
+      display: none; margin-top: 0.3rem; padding-left: 1.1rem;
+      font-size: 0.82rem; color: var(--muted);
+    }
+    .src-list.open { display: block; }
+    .src-list li { margin-bottom: 0.3rem; }
+    .src-list a { color: var(--accent); word-break: break-word; }
+    .typing {
+      align-self: flex-start; display: flex; gap: 5px;
+      padding: 0.75rem 1rem; background: #fff;
+      border: 1px solid var(--line); border-radius: 14px;
+      border-bottom-left-radius: 3px;
+    }
+    .dot {
+      width: 7px; height: 7px; border-radius: 50%;
+      background: var(--muted); animation: bounce 1.2s infinite;
+    }
+    .dot:nth-child(2) { animation-delay: 0.2s; }
+    .dot:nth-child(3) { animation-delay: 0.4s; }
+    @keyframes bounce {
+      0%,60%,100% { transform: translateY(0); }
+      30%          { transform: translateY(-5px); }
+    }
+    .err-bubble {
+      background: #fff5f5; border: 1px solid #f5c6c6;
+      color: var(--error); padding: 0.65rem 0.95rem;
+      border-radius: 14px; font-size: 0.95rem;
+    }
+    #input-bar {
+      flex-shrink: 0; padding: 0.8rem 1.25rem;
+      background: #fff; border-top: 1px solid var(--line);
+    }
+    #input-inner {
+      display: flex; gap: 0.5rem;
+      max-width: 700px; margin: 0 auto;
+    }
     #question {
-      flex: 1 1 14rem;
-      min-width: 0;
-      padding: 0.7rem 0.85rem;
-      font-size: 1rem;
-      border: 1px solid var(--line);
-      border-radius: 8px;
-      background: #fff;
-      color: var(--ink);
+      flex: 1; padding: 0.65rem 0.85rem; font-size: 0.97rem;
+      border: 1px solid var(--line); border-radius: 8px;
+      background: var(--bg); color: var(--ink);
     }
-    #question:focus { outline: 2px solid var(--accent); outline-offset: 1px; border-color: var(--accent); }
-    button {
-      flex: 0 0 auto;
-      padding: 0.7rem 1.25rem;
-      font-size: 1rem;
-      font-weight: 600;
-      color: #fff;
-      background: var(--accent);
-      border: 0;
-      border-radius: 8px;
-      cursor: pointer;
+    #question:focus {
+      outline: 2px solid var(--accent); outline-offset: 1px;
+      border-color: var(--accent);
     }
-    button:hover { background: var(--accent-press); }
-    button:disabled { opacity: 0.6; cursor: progress; }
-    #status { margin-top: 1.5rem; color: var(--muted); display: none; }
-    #status.show { display: flex; align-items: center; gap: 0.6rem; }
-    .spinner {
-      width: 1.1rem; height: 1.1rem;
-      border: 2px solid var(--line);
-      border-top-color: var(--accent);
-      border-radius: 50%;
-      animation: spin 0.7s linear infinite;
+    #submit {
+      padding: 0.65rem 1.1rem; font-size: 0.97rem; font-weight: 600;
+      color: #fff; background: var(--accent); border: 0;
+      border-radius: 8px; cursor: pointer; white-space: nowrap;
     }
-    @keyframes spin { to { transform: rotate(360deg); } }
-    #error { margin-top: 1.5rem; color: var(--error); display: none; }
-    #error.show { display: block; }
-    #result { margin-top: 1.75rem; display: none; }
-    #result.show { display: block; }
-    #answer { white-space: pre-wrap; }
-    h2 { font-size: 1rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); margin: 1.75rem 0 0.5rem; }
-    ol { padding-left: 1.4rem; margin: 0; }
-    li { margin-bottom: 0.6rem; }
-    li .meta { color: var(--ink); }
-    li a { color: var(--accent); word-break: break-word; }
+    #submit:hover    { background: var(--accent-press); }
+    #submit:disabled { opacity: 0.6; cursor: progress; }
   </style>
 </head>
 <body>
-  <main>
-    <header>
-      <h1>AskGloucester</h1>
-      <p class="subtitle">Ask questions about Gloucester, MA public meetings</p>
-    </header>
+  <header>
+    <h1>AskGloucester</h1>
+    <p>Ask questions about Gloucester, MA public meetings</p>
+  </header>
 
-    <form id="ask-form">
-      <input id="question" name="question" type="text" autocomplete="off"
-             placeholder="e.g. What did the School Committee discuss last meeting?" required>
-      <button id="submit" type="submit">Ask</button>
-    </form>
+  <div id="thread">
+    <div id="welcome">
+      Ask anything about City Council, School Committee, or other
+      Gloucester municipal meetings.
+    </div>
+  </div>
 
-    <div id="status"><span class="spinner"></span><span>Searching the records…</span></div>
-    <p id="error"></p>
-
-    <section id="result">
-      <p id="answer"></p>
-      <h2 id="sources-heading" style="display:none">Sources</h2>
-      <ol id="sources"></ol>
-    </section>
-  </main>
+  <div id="input-bar">
+    <div id="input-inner">
+      <input id="question" type="text" autocomplete="off"
+             placeholder="What was discussed at the last City Council meeting?">
+      <button id="submit">Ask</button>
+    </div>
+  </div>
 
   <script>
-    const form = document.getElementById("ask-form");
-    const input = document.getElementById("question");
-    const button = document.getElementById("submit");
-    const statusEl = document.getElementById("status");
-    const errorEl = document.getElementById("error");
-    const result = document.getElementById("result");
-    const answerEl = document.getElementById("answer");
-    const sourcesHeading = document.getElementById("sources-heading");
-    const sourcesEl = document.getElementById("sources");
+    const thread   = document.getElementById("thread");
+    const welcome  = document.getElementById("welcome");
+    const input    = document.getElementById("question");
+    const submit   = document.getElementById("submit");
 
-    function showError(message) {
-      errorEl.textContent = message;
-      errorEl.classList.add("show");
+    let history = [];
+
+    function srcLabel(s) {
+      const p = [s.meeting_body, s.document_type, s.document_date].filter(Boolean);
+      let t = p.join(" \u2014 ") || "Source";
+      if (s.page_number != null) t += ", p." + s.page_number;
+      return t;
     }
 
-    // Build "Body — type — date, p.N" from whichever fields are present.
-    function sourceLabel(s) {
-      const parts = [s.meeting_body, s.document_type, s.document_date].filter(Boolean);
-      let label = parts.join(" — ") || "Source";
-      if (s.page_number != null) label += ", p." + s.page_number;
-      return label;
+    function addUser(text) {
+      welcome.style.display = "none";
+      const d = document.createElement("div");
+      d.className = "msg user";
+      const b = document.createElement("div");
+      b.className = "bubble";
+      b.textContent = text;
+      d.appendChild(b);
+      thread.appendChild(d);
+      thread.scrollTop = thread.scrollHeight;
     }
 
-    function renderSources(sources) {
-      sourcesEl.replaceChildren();
-      if (!sources || sources.length === 0) {
-        sourcesHeading.style.display = "none";
-        return;
+    function addTyping() {
+      const d = document.createElement("div");
+      d.className = "typing";
+      for (let i = 0; i < 3; i++) {
+        const dot = document.createElement("div");
+        dot.className = "dot";
+        d.appendChild(dot);
       }
-      sourcesHeading.style.display = "";
-      for (const s of sources) {
-        const li = document.createElement("li");
-        if (s.source_url) {
-          const a = document.createElement("a");
-          a.href = s.source_url;
-          a.target = "_blank";
-          a.rel = "noopener noreferrer";
-          a.textContent = sourceLabel(s);
-          li.appendChild(a);
-        } else {
-          const span = document.createElement("span");
-          span.className = "meta";
-          span.textContent = sourceLabel(s);
-          li.appendChild(span);
-        }
-        sourcesEl.appendChild(li);
-      }
+      thread.appendChild(d);
+      thread.scrollTop = thread.scrollHeight;
+      return d;
     }
 
-    form.addEventListener("submit", async (event) => {
-      event.preventDefault();
-      const question = input.value.trim();
-      if (!question) return;
+    function addAssistant(text, sources) {
+      const d = document.createElement("div");
+      d.className = "msg assistant";
 
-      // Reset to a clean loading state before each request.
-      button.disabled = true;
-      statusEl.classList.add("show");
-      errorEl.classList.remove("show");
-      result.classList.remove("show");
+      const b = document.createElement("div");
+      b.className = "bubble";
+      b.textContent = text;
+      d.appendChild(b);
 
-      try {
-        const response = await fetch("/ask", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ question }),
+      if (sources && sources.length) {
+        const wrap   = document.createElement("div");
+        wrap.className = "sources";
+        const toggle = document.createElement("button");
+        toggle.className = "src-toggle";
+        toggle.textContent = "\u25b8 " + sources.length +
+          " source" + (sources.length === 1 ? "" : "s");
+        const list = document.createElement("ol");
+        list.className = "src-list";
+        sources.forEach(s => {
+          const li = document.createElement("li");
+          if (s.source_url) {
+            const a = document.createElement("a");
+            a.href = s.source_url; a.target = "_blank";
+            a.rel = "noopener noreferrer";
+            a.textContent = srcLabel(s);
+            li.appendChild(a);
+          } else {
+            li.textContent = srcLabel(s);
+          }
+          list.appendChild(li);
         });
-        if (!response.ok) {
-          throw new Error("The server returned an error (" + response.status + "). Please try again.");
-        }
-        const data = await response.json();
-        answerEl.textContent = data.answer || "";
-        renderSources(data.sources);
-        result.classList.add("show");
-      } catch (err) {
-        // Covers both non-OK responses and network failures (fetch rejecting).
-        showError(err instanceof TypeError
-          ? "Could not reach the server. Check your connection and try again."
-          : err.message);
-      } finally {
-        button.disabled = false;
-        statusEl.classList.remove("show");
+        toggle.addEventListener("click", () => {
+          const open = list.classList.toggle("open");
+          toggle.textContent = (open ? "\u25be " : "\u25b8 ") +
+            sources.length + " source" + (sources.length === 1 ? "" : "s");
+        });
+        wrap.appendChild(toggle); wrap.appendChild(list);
+        d.appendChild(wrap);
       }
+
+      thread.appendChild(d);
+      thread.scrollTop = thread.scrollHeight;
+    }
+
+    function addError(msg) {
+      const d = document.createElement("div");
+      d.className = "msg assistant";
+      const b = document.createElement("div");
+      b.className = "err-bubble";
+      b.textContent = msg;
+      d.appendChild(b);
+      thread.appendChild(d);
+      thread.scrollTop = thread.scrollHeight;
+    }
+
+    async function send() {
+      const q = input.value.trim();
+      if (!q) return;
+      input.value = "";
+      submit.disabled = true;
+      addUser(q);
+      const typing = addTyping();
+      try {
+        const res = await fetch("/ask", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({ question: q, history }),
+        });
+        typing.remove();
+        if (!res.ok) throw new Error("Server error (" + res.status + "). Please try again.");
+        const data = await res.json();
+        addAssistant(data.answer, data.sources);
+        history.push({role: "user",      content: q});
+        history.push({role: "assistant", content: data.answer});
+      } catch(e) {
+        typing.remove();
+        addError(e instanceof TypeError
+          ? "Could not reach the server. Check your connection and try again."
+          : e.message);
+      } finally {
+        submit.disabled = false;
+        input.focus();
+      }
+    }
+
+    submit.addEventListener("click", send);
+    input.addEventListener("keydown", e => {
+      if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
     });
+    input.focus();
   </script>
 </body>
 </html>
