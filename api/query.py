@@ -364,6 +364,40 @@ def _format_sources(chunks: list[tuple[int, dict]]) -> str:
     return "\n".join(lines)
 
 
+def _extract_context_date(history: list[dict]) -> str | None:
+    """Extract a meeting date from the last assistant turn in history.
+
+    When a follow-up question doesn't specify a meeting, the last assistant
+    response likely names one. Parse the first ISO date (YYYY-MM-DD) or
+    spelled-out date (Month DD, YYYY) from it so retrieval can pin to that
+    same meeting.
+    """
+    from datetime import datetime as _dt
+    text = next(
+        (m["content"] for m in reversed(history) if m["role"] == "assistant"),
+        None,
+    )
+    if not text:
+        return None
+    # ISO format: 2026-05-26
+    m = re.search(r'\b(\d{4}-\d{2}-\d{2})\b', text)
+    if m:
+        return m.group(1)
+    # Spelled-out: May 26, 2026
+    months = (
+        "January|February|March|April|May|June|July|August|"
+        "September|October|November|December"
+    )
+    m = re.search(rf'({months})\s+(\d{{1,2}}),?\s+(\d{{4}})', text)
+    if m:
+        try:
+            d = _dt.strptime(f"{m.group(1)} {m.group(2)} {m.group(3)}", "%B %d %Y")
+            return d.strftime("%Y-%m-%d")
+        except ValueError:
+            pass
+    return None
+
+
 def ask(question: str, history: list[dict] | None = None) -> tuple[str, list[tuple[int, dict]]]:
     """Run one full RAG pass and return (answer_text, source_chunks).
 
@@ -386,8 +420,16 @@ def ask(question: str, history: list[dict] | None = None) -> tuple[str, list[tup
     # A follow-up may not re-name the body the conversation is about
     # ("what about the budget?"). Fall back to detecting it from the last
     # user turn so retrieval stays scoped to the right body.
+    body_from_history = False
     if body is None and last_user:
         body = detect_body(last_user)
+        if body is not None:
+            body_from_history = True
+
+    # When the body was inherited from history, the resident is likely still
+    # asking about the same meeting the last answer named. Pull that meeting's
+    # date out of the last assistant turn so retrieval can pin to it.
+    context_date = _extract_context_date(history) if (body_from_history and history) else None
 
     # When follow-up questions use pronouns or elliptical references
     # ("that meeting", "who proposed it"), the retrieval query is
@@ -408,17 +450,20 @@ def ask(question: str, history: list[dict] | None = None) -> tuple[str, list[tup
     if recency:
         latest_date = resolve_latest_meeting_date(body)
         if latest_date:
-            # Pin to the full committee meeting so a subcommittee/negotiations
-            # session dated the same day can't leak in as "the last meeting".
             chunks = retrieve(
-                retrieval_question,
-                vector,
+                retrieval_question, vector,
                 meeting_body=body,
                 date_eq=latest_date,
                 meeting_category="full_committee",
             )
         else:
             chunks = retrieve(retrieval_question, vector, meeting_body=body)
+    elif context_date:
+        chunks = retrieve(
+            retrieval_question, vector,
+            meeting_body=body,
+            date_eq=context_date,
+        )
     else:
         chunks = retrieve(retrieval_question, vector, meeting_body=body)
 
