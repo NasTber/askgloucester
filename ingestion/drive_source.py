@@ -38,6 +38,7 @@ from dotenv import load_dotenv
 # byte-for-byte identical in how they land documents for the pipeline.
 import scraper
 from scraper import UploadedDocument, _blob_service_client, _sanitize
+from utils import classify_meeting_category
 
 load_dotenv()
 
@@ -186,6 +187,10 @@ def fetch_and_upload(start_date: str, end_date: str) -> list[UploadedDocument]:
         for file_id, name, meeting_date, prefix in in_window:
             document_date = meeting_date.strftime("%Y-%m-%d")
             source_url = f"https://drive.google.com/file/d/{file_id}/view"
+            # The filename names the specific meeting, so it (not the constant
+            # MEETING_BODY) is what distinguishes a full committee meeting from a
+            # subcommittee or negotiations session.
+            meeting_category = classify_meeting_category(name)
 
             local_path = os.path.join(tmpdir, f"{file_id}.pdf")
             try:
@@ -212,6 +217,7 @@ def fetch_and_upload(start_date: str, end_date: str) -> list[UploadedDocument]:
                 "meeting_body": MEETING_BODY,
                 "document_date": document_date,
                 "document_type": DOCUMENT_TYPE,
+                "meeting_category": meeting_category,
                 "source_url": source_url,
                 # Preserve the full filename (incl. the Special/Amended/ES/Joint
                 # prefix) for provenance. Azure blob metadata must be ASCII, so
@@ -235,6 +241,7 @@ def fetch_and_upload(start_date: str, end_date: str) -> list[UploadedDocument]:
                     meeting_body=MEETING_BODY,
                     document_date=document_date,
                     document_type=DOCUMENT_TYPE,
+                    meeting_category=meeting_category,
                 )
             )
 
