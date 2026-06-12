@@ -249,14 +249,14 @@ INDEX_HTML = """\
   <header>
     <h1>AskGloucester</h1>
     <p>Ask questions about Gloucester, MA public meetings</p>
-    <p class="beta">Beta · School Committee & City Council meetings only ·
-  Answers may be incomplete</p>
+    <p class="beta">Beta · Document Q&amp;A: School Committee &amp; City Council ·
+  Meeting schedules: city-wide · Answers may be incomplete</p>
   </header>
 
   <div id="thread">
     <div id="welcome">
-      Ask anything about City Council, School Committee, or other
-      Gloucester municipal meetings.
+      Ask what was discussed or decided at City Council and School Committee
+      meetings, or when any Gloucester public body meets.
     </div>
   </div>
 

@@ -19,6 +19,8 @@ param containerName string = 'raw-documents'
 
 // Built-in role: Storage Blob Data Contributor
 var blobDataContributorRoleId = 'ba92f5b4-2d11-453d-a403-e96b0029c9fe'
+// Built-in role: Storage Table Data Reader (read-only access to Table Storage)
+var tableDataReaderRoleId = '76199698-9eea-407e-8d99-65c5e7c5d8b9'
 
 resource storageAccount 'Microsoft.Storage/storageAccounts@2023-05-01' = {
   name: name
@@ -54,6 +56,19 @@ resource blobDataContributorAssignment 'Microsoft.Authorization/roleAssignments@
   scope: storageAccount
   properties: {
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', blobDataContributorRoleId)
+    principalId: principalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
+// The API managed identity reads the `events` calendar table (api/calendar.py
+// for the schedule_lookup agent tool). Read-only is sufficient; the table is
+// written by the ingestion pipeline, not the API.
+resource tableDataReaderAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(storageAccount.id, principalId, tableDataReaderRoleId)
+  scope: storageAccount
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', tableDataReaderRoleId)
     principalId: principalId
     principalType: 'ServicePrincipal'
   }

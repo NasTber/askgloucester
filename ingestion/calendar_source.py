@@ -98,6 +98,11 @@ def _canonical_body(name: str) -> str:
 # indexed-document bodies (via _canonical_body); the rest are calendar-only
 # bodies that have no documents indexed.
 #
+# WRITE-SIDE SOURCE OF TRUTH for the calendar body roster. The deployed API reads
+# this table but cannot import ingestion/, so it mirrors these canonical body
+# names in api/calendar.py:CALENDAR_BODIES — keep the two in sync when a CID is
+# added/removed/renamed here.
+#
 # Excluded by omission: 14 (holidays), 20 (special events).
 # TODO: add the Planning Board CID here once it is discovered — do not block on it.
 CID_BODY: dict[int, str] = {

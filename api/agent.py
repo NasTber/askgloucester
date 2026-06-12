@@ -29,6 +29,7 @@ from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.tools import tool
 from langchain_openai import AzureChatOpenAI
 
+from . import calendar
 from .query import (
     AZURE_OPENAI_API_VERSION,
     AZURE_OPENAI_CHAT_DEPLOYMENT,
@@ -158,46 +159,97 @@ def doc_search(
     return numbered, chunks
 
 
+@tool
+def schedule_lookup(
+    body: str | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
+) -> str:
+    """Look up WHEN Gloucester public bodies meet — dates and times of meetings.
+
+    Use for "when does X meet", "next / upcoming meeting", "what's on the
+    schedule". Do NOT use for what was discussed, decided, or voted at a meeting —
+    that is ``doc_search``. Covers the city's full calendar roster, not just the
+    bodies with indexed documents.
+
+    Args:
+        body: The public body, when the user named one. Must be on the city
+            calendar roster: City Council, School Committee, Conservation
+            Commission, Council on Aging, Board of Assessors, Affordable Housing
+            Trust, Board of Registrars, Community Preservation, Fisheries
+            Commission, Licensing Board, or City-Owned Cemeteries Advisory
+            Committee. Omit to span every body.
+        start_date: Window start as YYYY-MM-DD. Omit for upcoming meetings (today).
+            For "last / previous meeting" questions, pass a past date.
+        end_date: Window end as YYYY-MM-DD. Omit to default to ~60 days out.
+    """
+    # Deterministic body normalization against the calendar roster; decline a body
+    # the calendar does not cover rather than silently spanning everything.
+    resolved_body: str | None = None
+    if body is not None and body.strip():
+        resolved_body = calendar.normalize_body(body)
+        if resolved_body is None:
+            return "That body isn't on the Gloucester public-meeting calendar."
+
+    # Dates are ISO-validated here; the calendar module applies Eastern day
+    # boundaries and the default look-ahead window.
+    start_utc, end_utc = calendar.window_from_dates(
+        _normalize_date(start_date), _normalize_date(end_date)
+    )
+    events = calendar.get_events(resolved_body, start_utc, end_utc)
+    return calendar.render_events(resolved_body, events, start_utc, end_utc)
+
+
 # --- Router seam ------------------------------------------------------------
-# The tools the agent may call. ``doc_search`` is the document-retrieval tool
-# today. Append future tools (calendar, contacts, ...) to this list — create_agent
-# routes to them automatically once registered. This is the single place new
-# capabilities plug in.
-TOOLS = [doc_search]
+# The tools the agent may call. ``doc_search`` answers "what was discussed /
+# decided" from indexed documents (SC + City Council); ``schedule_lookup``
+# answers "when do they meet" from the city calendar (full roster). Append future
+# tools (contacts, ...) here — create_agent routes to them automatically once
+# registered. This is the single place new capabilities plug in.
+TOOLS = [doc_search, schedule_lookup]
 
 
-# Tool-use guidance appended to the ported grounding rules. Tells the agent when
-# to set each doc_search argument and reinforces the "don't substitute an
-# unindexed body" rule at the planning (tool-call) layer, not just at write time.
+# Tool-use guidance appended to the ported grounding rules. Routes between the two
+# tools by INTENT and SCOPE, and reinforces the allowlists at the planning
+# (tool-call) layer, not just at write time. The two tools cover different bodies
+# on purpose — keep their scopes distinct.
 TOOL_GUIDANCE = (
-    "\n\nTOOLS\n"
-    "You have one tool, doc_search. Use it to ground every factual claim; never\n"
-    "answer civic questions from your own knowledge.\n"
+    "\n\nTOOLS — route by what the question is asking.\n"
+    "Never answer civic questions from your own knowledge; use a tool.\n"
     "\n"
-    "INDEXED BODIES (ALLOWLIST). The ONLY meeting bodies with indexed documents\n"
-    "are:\n"
-    "  - School Committee\n"
-    "  - City Council\n"
-    "If the user asks about ANY other named body — for example the Parking\n"
-    "Commission, Conservation Commission, Zoning Board of Appeals, Licensing\n"
-    "Board, Planning Board, or any commission/board/authority not on the\n"
-    "allowlist above — you MUST decline: state briefly that that body's documents\n"
-    "are not indexed, and stop. Do NOT search on its behalf. Another body's\n"
-    "documents are NEVER a substitute for the named body: e.g. City Council\n"
-    "parking ordinances are NOT an answer about the Parking Commission, and must\n"
-    "not be offered. Only when a question names no body, or names an allowlisted\n"
-    "body, may you search.\n"
-    "- Set the body argument when the user names or clearly implies an\n"
-    "  allowlisted body; omit it for general questions so the search spans all\n"
-    "  indexed bodies.\n"
-    "- Set recency=true (together with body) for 'last / latest / most recent\n"
-    "  meeting' questions.\n"
-    "- For a follow-up question, use the conversation so far to choose the body,\n"
-    "  and when the previous answer was about one specific meeting, pass that\n"
-    "  meeting's date as target_date so the follow-up stays on the same meeting.\n"
-    "- You may call doc_search more than once. Cite sources by their bracketed\n"
-    "  number exactly as shown, e.g. [1] or [2][3]. If a search returns no\n"
-    "  documents, say so plainly — never invent sources or citation numbers."
+    "1) doc_search — what was DISCUSSED, DECIDED, VOTED, or SAID at a meeting\n"
+    "   (the content of agendas and minutes).\n"
+    "   DOCUMENT ALLOWLIST: the ONLY bodies with indexed documents are\n"
+    "     - School Committee\n"
+    "     - City Council\n"
+    "   For a content question about ANY other body (Parking Commission,\n"
+    "   Conservation Commission, Zoning Board of Appeals, Licensing Board,\n"
+    "   Planning Board, etc.) you MUST decline: say that body's documents are not\n"
+    "   indexed, and stop. Do NOT search on its behalf and NEVER substitute\n"
+    "   another body's documents (e.g. City Council parking ordinances are not an\n"
+    "   answer about the Parking Commission). Set body only for an allowlisted\n"
+    "   body; omit it to span both. Set recency=true (with body) for 'last /\n"
+    "   latest / most recent meeting'. For a follow-up, reuse the conversation to\n"
+    "   pick the body and pass the prior meeting's date as target_date. Cite\n"
+    "   sources by their bracketed number exactly as shown, e.g. [1] or [2][3];\n"
+    "   if a search returns nothing, say so — never invent sources.\n"
+    "\n"
+    "2) schedule_lookup — WHEN a body meets (dates/times: next, upcoming, past,\n"
+    "   or 'what's on the schedule'). This uses the city's FULL calendar roster,\n"
+    "   which is broader than the document allowlist: City Council, School\n"
+    "   Committee, Conservation Commission, Council on Aging, Board of Assessors,\n"
+    "   Affordable Housing Trust, Board of Registrars, Community Preservation,\n"
+    "   Fisheries Commission, Licensing Board, City-Owned Cemeteries Advisory\n"
+    "   Committee. Set body when one is named; omit to span all. Pass start_date/\n"
+    "   end_date (YYYY-MM-DD) only when the user gives a specific window; omit for\n"
+    "   upcoming meetings, and pass a past start_date for 'last meeting' timing.\n"
+    "\n"
+    "SCOPE CROSS-CASE (important): the two rosters differ. Example — Conservation\n"
+    "Commission: a CONTENT question ('what did they decide') must DECLINE (not in\n"
+    "the document allowlist), but a SCHEDULE question ('when do they meet') is\n"
+    "ANSWERABLE via schedule_lookup. A body on NEITHER list (e.g. a made-up board)\n"
+    "→ decline both. When in doubt about which tool, match the verb: 'what/why/\n"
+    "who decided' → doc_search; 'when/next/upcoming' → schedule_lookup."
 )
 
 

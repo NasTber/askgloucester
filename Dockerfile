@@ -3,8 +3,11 @@
 # Only the `api/` package is copied: it is fully self-contained. `api/query.py`
 # imports stdlib + azure-* / openai / dotenv only, and the meeting_category
 # retrieval filter uses the literal string 'full_committee' — it does NOT import
-# ingestion/utils.classify_meeting_category. So `ingestion/` is intentionally
-# left out of the image (verified: no `api/` -> `ingestion/` import).
+# ingestion/utils.classify_meeting_category. `api/calendar.py` reads the `events`
+# table DIRECTLY via azure-data-tables (its own read path + a mirrored body
+# roster), so it does NOT import ingestion/calendar_source either. So `ingestion/`
+# is intentionally left out of the image (verified: no `api/` -> `ingestion/`
+# import); the boundary holds.
 
 FROM python:3.12-slim
 
