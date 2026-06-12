@@ -108,8 +108,15 @@ def doc_search(
         recency: True when the user asks about the most recent / last / latest
             meeting of a body. Requires ``body``; pins the search to that body's
             newest past full-committee minutes.
-        target_date: A single meeting date as YYYY-MM-DD when the user (or the
-            prior turn) refers to one specific meeting. Omit otherwise.
+        target_date: A single meeting date as YYYY-MM-DD, set ONLY when the user
+            (or the prior turn) names ONE specific meeting day, e.g. "the May 13
+            meeting" or "the March 4th agenda". This is an exact-date match, so a
+            date with no meeting returns nothing. OMIT it for month-granular,
+            seasonal, range, or relative-time questions ("June", "this spring",
+            "between March and May", "lately") — those are NOT a single date.
+            When you omit it, KEEP the temporal words in the query text: source
+            content is date-prefixed (e.g. "City Council agenda — June 9, 2026
+            (2026-06-09) ..."), so "June" and date words match in hybrid search.
     """
     state = _CITATION_STATE.get()
 
