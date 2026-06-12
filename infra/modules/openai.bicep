@@ -60,14 +60,14 @@ resource embeddingDeployment 'Microsoft.CognitiveServices/accounts/deployments@2
   }
 }
 
-// gpt-4.1-mini — GlobalStandard, 20K TPM, version 2025-04-14. Already live;
+// gpt-4.1-mini — GlobalStandard, 100K TPM, version 2025-04-14. Already live;
 // declared here to bring the chat deployment under IaC.
 resource chatDeployment 'Microsoft.CognitiveServices/accounts/deployments@2024-10-01' = {
   parent: openAi
   name: chatDeploymentName
   sku: {
     name: 'GlobalStandard'
-    capacity: 20
+    capacity: 100
   }
   properties: {
     model: {
