@@ -38,6 +38,8 @@ from azure.identity import DefaultAzureCredential
 from azure.storage.blob import BlobServiceClient, ContentSettings
 from dotenv import load_dotenv
 
+from utils import classify_meeting_category
+
 load_dotenv()
 
 logger = logging.getLogger(__name__)
@@ -53,11 +55,13 @@ RAW_DOCUMENTS_CONTAINER = os.environ.get("RAW_DOCUMENTS_CONTAINER", "raw-documen
 ARCHIVE_SOURCES: dict[int, tuple[str, str]] = {
     113: ("School Committee", "agenda"),
     114: ("School Committee", "minutes"),
+    35: ("City Council", "agenda"),
+    36: ("City Council", "minutes"),
 }
 
 # Out of the box, ingest School Committee agendas and minutes only, to keep the
 # initial test set small.
-DEFAULT_AMID_LIST: tuple[int, ...] = (113, 114)
+DEFAULT_AMID_LIST: tuple[int, ...] = (113, 114, 35, 36)
 
 # Some CivicPlus deployments reject requests without a browser-like User-Agent,
 # returning an interstitial or 403 instead of the archive listing. Present one.
@@ -86,6 +90,7 @@ class UploadedDocument:
     meeting_body: str
     document_date: str  # ISO date, YYYY-MM-DD
     document_type: str  # "agenda" or "minutes"
+    meeting_category: str  # "full_committee", "subcommittee" or "negotiations"
 
 
 @dataclass
@@ -276,6 +281,10 @@ def scrape_and_upload(
                 continue
 
             document_date = entry.document_date.strftime("%Y-%m-%d")
+            # Derive the meeting category from the listing title — the AMID-level
+            # meeting_body can't tell a full committee meeting from a subcommittee
+            # or a negotiations session, but the title can.
+            meeting_category = classify_meeting_category(entry.title)
             # The PDF is downloaded directly from the ViewFile endpoint by ADID.
             source_url = f"{ARCHIVE_BASE_URL}/ArchiveCenter/ViewFile/Item/{entry.adid}"
 
@@ -294,6 +303,7 @@ def scrape_and_upload(
                 "meeting_body": body,
                 "document_date": document_date,
                 "document_type": document_type,
+                "meeting_category": meeting_category,
                 "source_url": source_url,
                 # The full listing title (e.g. "March 12, 2025 School Committee
                 # Meeting") names the specific meeting, which the AMID-level
@@ -318,6 +328,7 @@ def scrape_and_upload(
                     meeting_body=body,
                     document_date=document_date,
                     document_type=document_type,
+                    meeting_category=meeting_category,
                 )
             )
 
