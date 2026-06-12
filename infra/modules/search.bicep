@@ -1,4 +1,4 @@
-// Azure AI Search (Free tier) using RBAC for data and control plane.
+// Azure AI Search (Basic tier) using RBAC for data and control plane.
 // Local API key auth is disabled. The managed identity is granted
 // Search Index Data Contributor and Search Service Contributor.
 
@@ -22,7 +22,7 @@ resource search 'Microsoft.Search/searchServices@2024-03-01-preview' = {
   name: name
   location: location
   sku: {
-    name: 'free'
+    name: 'basic'
   }
   properties: {
     replicaCount: 1

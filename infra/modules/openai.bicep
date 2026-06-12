@@ -38,14 +38,16 @@ resource openAi 'Microsoft.CognitiveServices/accounts@2024-10-01' existing = {
   name: name
 }
 
-// text-embedding-3-small — already live (Standard, capacity 120, v1). Declared
-// to match live exactly so this is idempotent (no capacity drift).
+// text-embedding-3-small — Standard, v1. capacity is TPM in thousands; raised
+// from 120 (120K TPM) to 350 (350K TPM) so a full reindex isn't throttled by the
+// embedding TPM ceiling (the source of the 59s rate-limit waits). Model, version
+// and dimensions are unchanged.
 resource embeddingDeployment 'Microsoft.CognitiveServices/accounts/deployments@2024-10-01' = {
   parent: openAi
   name: embeddingDeploymentName
   sku: {
     name: 'Standard'
-    capacity: 120
+    capacity: 350
   }
   properties: {
     model: {

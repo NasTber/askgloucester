@@ -11,8 +11,11 @@ embedding *deployment* name come from the environment / ``.env``:
     AZURE_OPENAI_ENDPOINT            e.g. https://<resource>.openai.azure.com
     AZURE_OPENAI_EMBEDDING_DEPLOYMENT   the deployment name for the model
 
-Chunks are sent in batches of 100 to stay within the embeddings API's
-per-request input limits.
+Chunks are sent in batches (one request per ~100 chunks) so a full reindex is a
+handful of round trips instead of one call per chunk. Each batch is bounded by
+BOTH a max item count and a token budget, to stay under the embeddings API's
+per-request limits (see below); vectors are mapped back to chunks by the
+response's ``index`` so order can never drift.
 """
 
 from __future__ import annotations
@@ -20,6 +23,7 @@ from __future__ import annotations
 import logging
 import os
 
+import tiktoken
 from azure.identity import DefaultAzureCredential, get_bearer_token_provider
 from dotenv import load_dotenv
 from openai import AzureOpenAI
@@ -32,9 +36,18 @@ logger = logging.getLogger(__name__)
 EMBEDDING_MODEL = "text-embedding-3-small"
 EMBEDDING_DIMENSIONS = 1536
 
-# The embeddings API accepts many inputs per call; 100 keeps us comfortably
-# within request size/token limits while minimizing round trips.
+# Azure OpenAI embeddings per-request limits (text-embedding-3 family):
+#   * up to 2048 inputs per request,
+#   * up to 300,000 tokens summed across all inputs (HTTP 400 if exceeded),
+#   * up to 8192 tokens per single input (our ~500-token chunks never near this).
+# We cap each request at ~100 items AND keep the summed tokens under a safety
+# margin below the 300k hard cap, so a batch of unusually large chunks splits
+# earlier instead of erroring.
 DEFAULT_BATCH_SIZE = 100
+MAX_REQUEST_TOKENS = 280_000
+
+# text-embedding-3 tokenizes with cl100k_base; use it to budget each request.
+_ENCODING = tiktoken.get_encoding("cl100k_base")
 
 # Scope used to request AAD tokens for Azure OpenAI ("Cognitive Services").
 _TOKEN_SCOPE = "https://cognitiveservices.azure.com/.default"
@@ -57,13 +70,41 @@ def _client() -> AzureOpenAI:
     )
 
 
+def _batched(chunks, max_items: int, max_tokens: int):
+    """Yield lists of chunks, each within ``max_items`` AND ``max_tokens``.
+
+    Greedily packs chunks in their original order; flushes before a chunk would
+    push the batch past either cap. A single chunk always forms at least a
+    one-item batch (our chunks are ~500 tokens, far under the per-input limit),
+    so this never loops forever on an oversized input.
+    """
+    batch: list = []
+    batch_tokens = 0
+    for chunk in chunks:
+        tokens = len(_ENCODING.encode(chunk.content))
+        if batch and (len(batch) >= max_items or batch_tokens + tokens > max_tokens):
+            yield batch
+            batch, batch_tokens = [], 0
+        batch.append(chunk)
+        batch_tokens += tokens
+    if batch:
+        yield batch
+
+
 def embed_chunks(chunks, batch_size: int = DEFAULT_BATCH_SIZE):
     """Populate ``content_vector`` on each chunk in place.
 
+    Chunks are embedded in batches — at most ``batch_size`` items and
+    ``MAX_REQUEST_TOKENS`` tokens per request — so a full reindex is a few dozen
+    calls rather than thousands. Each returned embedding is written back to its
+    chunk by the response item's ``index`` (not positional zip), so a chunk can
+    never receive another chunk's vector even if the API reorders ``data``.
+
     Args:
         chunks: Iterable of :class:`chunker.Chunk` objects to embed.
-        batch_size: Number of chunk texts per embeddings request (max useful
-            size is bounded by the API's input limit; defaults to 100).
+        batch_size: Max chunk texts per embeddings request (default 100). The
+            per-request token budget (:data:`MAX_REQUEST_TOKENS`) may flush a
+            batch earlier when chunks are unusually large.
 
     Returns:
         The same list of chunks, each with ``content_vector`` set.
@@ -76,23 +117,19 @@ def embed_chunks(chunks, batch_size: int = DEFAULT_BATCH_SIZE):
     client = _client()
     deployment = os.environ["AZURE_OPENAI_EMBEDDING_DEPLOYMENT"]
 
-    for start in range(0, len(chunks), batch_size):
-        batch = chunks[start : start + batch_size]
-        # The embeddings API takes a list of strings and returns one vector
-        # per input, in the same order.
+    done = 0
+    for batch in _batched(chunks, max_items=batch_size, max_tokens=MAX_REQUEST_TOKENS):
+        # The embeddings API takes a list of strings and returns one vector per
+        # input; we map each result back by its `index` to preserve alignment.
         response = client.embeddings.create(
             model=deployment,
             input=[c.content for c in batch],
             dimensions=EMBEDDING_DIMENSIONS,
         )
-        for chunk, item in zip(batch, response.data):
-            chunk.content_vector = item.embedding
-        logger.info(
-            "Embedded batch %d-%d (%d chunk(s))",
-            start,
-            start + len(batch),
-            len(batch),
-        )
+        for item in response.data:
+            batch[item.index].content_vector = item.embedding
+        done += len(batch)
+        logger.info("Embedded %d/%d chunk(s)", done, len(chunks))
 
     logger.info("Embedded %d chunk(s)", len(chunks))
     return chunks
