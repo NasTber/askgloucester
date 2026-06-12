@@ -1,16 +1,17 @@
-"""Command-line RAG query tool for AskGloucester.
+"""Azure AI Search retrieval primitives for AskGloucester.
 
-A single retrieval-augmented-generation (RAG) pass over the Gloucester civic
-documents indexed in Azure AI Search:
+The reusable building blocks of a retrieval-augmented-generation (RAG) pass over
+the Gloucester civic documents indexed in Azure AI Search:
 
 1. ``embed``         — turn the question into a vector with Azure OpenAI.
 2. ``retrieve``      — hybrid (keyword + vector) search over the index.
 3. ``build_context`` — assemble a numbered, grounded source block.
-4. ``answer``        — generate a cited answer with the chat model.
 
-The four steps are exposed as standalone, importable functions so the FastAPI
-``/ask`` endpoint can call them directly. Only ``main()`` knows about argparse
-and printing — the core functions never touch either.
+Generation and orchestration live in ``api.agent`` (a LangChain tool-using
+agent that calls these primitives via the ``doc_search`` tool). ``ask`` here is a
+thin delegator to that agent, kept as the single shared entry point so the CLI
+(``main``) and the FastAPI ``/ask`` endpoint can never answer differently. Only
+``main()`` knows about argparse and printing.
 
 Authentication is ``DefaultAzureCredential`` end to end; no API keys are read
 or stored anywhere. The Azure OpenAI client authenticates with an AAD bearer
@@ -21,7 +22,6 @@ from __future__ import annotations
 
 import argparse
 import os
-import re
 from datetime import date
 from functools import lru_cache
 
@@ -93,46 +93,16 @@ SYSTEM_PROMPT = (
     "6. Be concise and factual."
 )
 
-# Maps keyword fragments that may appear in a question to the EXACT meeting_body
-# value stored in the index. The value is what goes into the OData filter, so it
-# must match the index casing/spelling precisely. First match wins. Extend this
-# as new bodies (Planning Board, etc.) are ingested.
+# The exact meeting_body values stored in the index, keyed by a canonical
+# lowercase form. These are the controlled constants the OData filter is built
+# from (never raw user/LLM text). ``api.agent`` reuses the values to normalize an
+# LLM-provided body string to the right casing/spelling. Extend this as new
+# bodies are ingested.
 BODY_KEYWORDS = {
     "city council": "City Council",
     "school committee": "School Committee",
     "planning board": "Planning Board",
 }
-
-# Phrases that signal the resident wants the single most recent meeting rather
-# than a topical search. Only meaningful when a body is also detected — "latest"
-# with no body stays on the normal cross-index path. Substring match, lowercased.
-RECENCY_TERMS = (
-    "last meeting",
-    "latest meeting",
-    "most recent meeting",
-    "last",
-    "latest",
-    "most recent",
-    "newest",
-    "that meeting",
-    "this meeting",
-)
-
-
-def detect_body(question: str) -> str | None:
-    """Return the meeting_body a question is about, or None if unspecified.
-
-    A deliberately dumb, cheap keyword match — no LLM call. If the question
-    names a known body we can pre-filter retrieval to just that body's chunks;
-    if it names none we return None and search across everything (the common
-    case). The matched value is a controlled constant from BODY_KEYWORDS, never
-    raw user text, so it is safe to drop straight into an OData filter.
-    """
-    q = question.lower()
-    for keyword, body in BODY_KEYWORDS.items():
-        if keyword in q:
-            return body
-    return None
 
 
 def _required(name: str, value: str | None) -> str:
@@ -295,15 +265,17 @@ def retrieve(
     return [dict(r) for r in results]
 
 
-def build_context(chunks: list[dict]) -> str:
+def build_context(chunks: list[dict], start: int = 1) -> str:
     """Assemble retrieved chunks into a numbered, grounded source block.
 
     Each chunk becomes one numbered source. The numbering ([1], [2], ...)
-    follows the chunk order and is what the model is told to cite — main() reuses
-    the same order when printing the source list, so citations line up.
+    follows the chunk order and is what the model is told to cite. ``start`` lets
+    a caller continue the numbering across multiple retrieval calls — the agent's
+    ``doc_search`` tool passes a running offset so a second search produces
+    ``[11], [12], ...`` instead of colliding back at ``[1]``.
     """
     blocks = []
-    for i, c in enumerate(chunks, start=1):
+    for i, c in enumerate(chunks, start=start):
         # A short provenance header helps the model attribute claims correctly.
         header_bits = [
             c.get("meeting_body"),
@@ -319,32 +291,6 @@ def build_context(chunks: list[dict]) -> str:
             f"{content}"
         )
     return "\n\n".join(blocks)
-
-
-def answer(question: str, context: str, history: list[dict] | None = None) -> str:
-    """Generate a cited answer grounded in the assembled context.
-
-    Sends the system grounding contract plus the question and numbered sources
-    to the chat deployment at low temperature for deterministic, faithful output.
-    """
-    client = _openai_client()
-    # Prepend today's date so the model can reason about past vs. upcoming meetings.
-    system_content = f"Today's date is {date.today():%A, %B %d, %Y}.\n\n{SYSTEM_PROMPT}"
-    user_message = (
-        f"Question: {question}\n\n"
-        f"Sources:\n{context}\n\n"
-        "Answer the question using only the sources above, citing with [n]."
-    )
-    response = client.chat.completions.create(
-        model=AZURE_OPENAI_CHAT_DEPLOYMENT,
-        temperature=0.1,  # low temperature: stay faithful to the sources
-        messages=[
-            {"role": "system", "content": system_content},
-            *(history or []),
-            {"role": "user", "content": user_message},
-        ],
-    )
-    return response.choices[0].message.content or ""
 
 
 def _format_sources(chunks: list[tuple[int, dict]]) -> str:
@@ -364,122 +310,23 @@ def _format_sources(chunks: list[tuple[int, dict]]) -> str:
     return "\n".join(lines)
 
 
-def _extract_context_date(history: list[dict]) -> str | None:
-    """Extract a meeting date from the last assistant turn in history.
-
-    When a follow-up question doesn't specify a meeting, the last assistant
-    response likely names one. Parse the first ISO date (YYYY-MM-DD) or
-    spelled-out date (Month DD, YYYY) from it so retrieval can pin to that
-    same meeting.
-    """
-    from datetime import datetime as _dt
-    text = next(
-        (m["content"] for m in reversed(history) if m["role"] == "assistant"),
-        None,
-    )
-    if not text:
-        return None
-    # ISO format: 2026-05-26
-    m = re.search(r'\b(\d{4}-\d{2}-\d{2})\b', text)
-    if m:
-        return m.group(1)
-    # Spelled-out: May 26, 2026
-    months = (
-        "January|February|March|April|May|June|July|August|"
-        "September|October|November|December"
-    )
-    m = re.search(rf'({months})\s+(\d{{1,2}}),?\s+(\d{{4}})', text)
-    if m:
-        try:
-            d = _dt.strptime(f"{m.group(1)} {m.group(2)} {m.group(3)}", "%B %d %Y")
-            return d.strftime("%Y-%m-%d")
-        except ValueError:
-            pass
-    return None
-
-
 def ask(question: str, history: list[dict] | None = None) -> tuple[str, list[tuple[int, dict]]]:
-    """Run one full RAG pass and return (answer_text, source_chunks).
+    """Run one agent pass and return ``(answer_text, source_chunks)``.
 
-    The single source of truth for the query loop, shared by the CLI (main)
-    and the FastAPI /ask endpoint so their behaviour — including the empty
-    decline — can never drift apart. ``source_chunks`` is empty whenever the
-    answer is a decline (no LLM call was made), which callers use to detect
-    that case.
+    Thin delegator to :func:`api.agent.ask` — the single shared entry point for
+    both the CLI (:func:`main`) and the FastAPI ``/ask`` endpoint, so they can
+    never answer the same question differently. The agent plans retrieval (via the
+    ``doc_search`` tool wrapping the primitives above) and writes a cited answer.
+    ``source_chunks`` holds exactly the chunks the answer cited, each with its
+    stable ``[n]``; it is empty whenever the answer cites nothing (a decline) —
+    the signal callers rely on.
+
+    Imported lazily so this module has no import-time dependency on ``api.agent``
+    (which imports the retrieval primitives from here).
     """
-    # The last user turn from history feeds two follow-up fixes below: meeting-
-    # body detection and retrieval-query enrichment. Compute it once.
-    last_user = None
-    if history:
-        last_user = next(
-            (m["content"] for m in reversed(history) if m["role"] == "user"),
-            None,
-        )
+    from .agent import ask as _agent_ask
 
-    body = detect_body(question)
-    # A follow-up may not re-name the body the conversation is about
-    # ("what about the budget?"). Fall back to detecting it from the last
-    # user turn so retrieval stays scoped to the right body.
-    body_from_history = False
-    if body is None and last_user:
-        body = detect_body(last_user)
-        if body is not None:
-            body_from_history = True
-
-    # When the body was inherited from history, the resident is likely still
-    # asking about the same meeting the last answer named. Pull that meeting's
-    # date out of the last assistant turn so retrieval can pin to it.
-    context_date = _extract_context_date(history) if (body_from_history and history) else None
-
-    # When follow-up questions use pronouns or elliptical references
-    # ("that meeting", "who proposed it"), the retrieval query is
-    # enriched with the last user turn from history so the embedding
-    # lands near the right documents. The original question is still
-    # passed to answer() so the model sees the clean follow-up.
-    retrieval_question = question
-    if last_user:
-        retrieval_question = f"{last_user} {question}"
-    vector = embed(retrieval_question)
-
-    # "Latest meeting" path: only when a body is detected AND the question uses a
-    # recency phrase. Pin retrieval to that body's newest past minutes so every
-    # chunk of that one meeting is returned. If the body has no qualifying minutes
-    # (resolve returns None), fall through to the normal retrieve path unchanged.
-    # Every other query keeps the existing behaviour exactly.
-    recency = body is not None and any(t in question.lower() for t in RECENCY_TERMS)
-    if recency:
-        latest_date = resolve_latest_meeting_date(body)
-        if latest_date:
-            chunks = retrieve(
-                retrieval_question, vector,
-                meeting_body=body,
-                date_eq=latest_date,
-                meeting_category="full_committee",
-            )
-        else:
-            chunks = retrieve(retrieval_question, vector, meeting_body=body)
-    elif context_date:
-        chunks = retrieve(
-            retrieval_question, vector,
-            meeting_body=body,
-            date_eq=context_date,
-        )
-    else:
-        chunks = retrieve(retrieval_question, vector, meeting_body=body)
-
-    if not chunks:
-        if body:
-            return (
-                f"I don't have any {body} documents indexed yet, so I can't answer that.",
-                [],
-            )
-        return ("No matching documents were found in the index.", [])
-
-    context = build_context(chunks)
-    answer_text = answer(question, context, history=history)
-    cited_ns = {int(n) for n in re.findall(r'\[(\d+)\]', answer_text)}
-    chunks = [(i, c) for i, c in enumerate(chunks, 1) if i in cited_ns]
-    return (answer_text, chunks)
+    return _agent_ask(question, history=history)
 
 
 def main() -> None:

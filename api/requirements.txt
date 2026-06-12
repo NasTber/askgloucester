@@ -10,3 +10,10 @@ azure-identity==1.25.3
 azure-search-documents==12.0.0
 openai==2.41.0
 python-dotenv==1.2.2
+
+# LangChain 1.x tool-using agent (api/agent.py): create_agent + LangGraph state,
+# AzureChatOpenAI via AAD token provider. See api/agent.py.
+langchain==1.3.9
+langchain-core==1.4.6
+langchain-openai==1.3.0
+langgraph==1.2.4
