@@ -198,6 +198,15 @@ INDEX_HTML = """\
     .src-list.open { display: block; }
     .src-list li { margin-bottom: 0.3rem; }
     .src-list a { color: var(--accent); word-break: break-word; }
+    /* Inline citation chips: [n] in the answer is rendered as a small
+       superscript link to its source. */
+    .cite {
+      font-size: 0.68em; vertical-align: super; line-height: 0;
+      font-weight: 600; color: var(--accent); text-decoration: none;
+      background: #e7eef4; border-radius: 4px;
+      padding: 0.05em 0.32em; margin: 0 0.08em;
+    }
+    a.cite:hover { text-decoration: underline; }
     .typing {
       align-self: flex-start; display: flex; gap: 5px;
       padding: 0.75rem 1rem; background: #fff;
@@ -308,13 +317,47 @@ INDEX_HTML = """\
       return d;
     }
 
+    // Render the answer into `bubble`, turning numeric [n] markers into small
+    // superscript citation chips that link to source n. Pure display transform:
+    // the [n] stay in the model output / API response; we only change how they
+    // look. Built with text nodes + createElement (never innerHTML on model
+    // output), so an answer can't inject markup. Non-numeric bracketed tokens
+    // (e.g. a stray [toolname]) are left untouched as plain text.
+    function renderAnswer(bubble, text, sources) {
+      const byN = {};
+      (sources || []).forEach(s => { byN[s.n] = s; });
+      // Capturing split: even indices are literal text, odd indices are the
+      // digits captured from a [<digits>] token.
+      const parts = String(text).split(/\\[(\\d+)\\]/);
+      parts.forEach((part, i) => {
+        if (i % 2 === 1) {
+          const n = parseInt(part, 10);
+          const s = byN[n];
+          const chip = (s && s.source_url)
+            ? document.createElement("a")
+            : document.createElement("span");
+          chip.className = "cite";
+          chip.textContent = n;                 // shows "1", not "[1]"
+          chip.title = s ? srcLabel(s) : ("Source " + n);
+          if (s && s.source_url) {
+            chip.href = s.source_url;
+            chip.target = "_blank";
+            chip.rel = "noopener noreferrer";
+          }
+          bubble.appendChild(chip);
+        } else if (part) {
+          bubble.appendChild(document.createTextNode(part));
+        }
+      });
+    }
+
     function addAssistant(text, sources) {
       const d = document.createElement("div");
       d.className = "msg assistant";
 
       const b = document.createElement("div");
       b.className = "bubble";
-      b.textContent = text;
+      renderAnswer(b, text, sources);
       d.appendChild(b);
 
       if (sources && sources.length) {
