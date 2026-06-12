@@ -28,6 +28,7 @@ from dotenv import load_dotenv
 # Make the ingestion modules importable when run from the project root.
 sys.path.insert(0, "ingestion")
 
+import calendar_source  # noqa: E402
 import chunker  # noqa: E402
 import drive_source  # noqa: E402
 import embedder  # noqa: E402
@@ -40,8 +41,29 @@ load_dotenv()
 logger = logging.getLogger("askgloucester.pipeline")
 
 
+def _run_calendar_step() -> None:
+    """Independent structured source: upsert calendar events into Table Storage.
+
+    Wrapped in its own try/except so a calendar failure can NEVER break the
+    document pipeline. Writes ONLY to Azure Table Storage — it does not touch blob
+    storage, Document Intelligence, chunking, embedding, or the AI Search index.
+    """
+    try:
+        result = calendar_source.ingest_calendar_events()
+        logger.info("Calendar step complete: %s", result)
+    except Exception as exc:  # noqa: BLE001 - never let calendar break documents
+        logger.exception("Calendar ingestion failed (continuing with documents): %s", exc)
+
+
 def run(start_date: str, end_date: str, meeting_body: str | None) -> int:
     """Run the full ingestion pipeline. Returns the number of chunks indexed."""
+    # 0. Independent structured source. Only on a full ('all') sweep, and run
+    # first so it executes regardless of the document flow's outcome (the
+    # documents path can early-return when its window is empty). Its own
+    # try/except keeps any calendar failure from breaking the document pipeline.
+    if meeting_body is None:
+        _run_calendar_step()
+
     # 1a. Scrape + upload Archive.aspx PDFs (agendas).
     documents = scraper.scrape_and_upload(
         start_date=start_date,
@@ -82,6 +104,7 @@ def run(start_date: str, end_date: str, meeting_body: str | None) -> int:
             document_date=doc.document_date,
             meeting_body=doc.meeting_body,
             document_type=doc.document_type,
+            meeting_category=doc.meeting_category,
             base_id=doc.blob_name,
         )
         logger.info("%s -> %d chunk(s)", doc.blob_name, len(chunks))
