@@ -1,0 +1,8 @@
+# Keep the build context small and free of secrets / local-only artifacts.
+.env
+.venv
+__pycache__
+.git
+scripts/
+ingestion/__pycache__
+*.pyc
