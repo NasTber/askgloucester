@@ -173,14 +173,23 @@ TOOL_GUIDANCE = (
     "\n\nTOOLS\n"
     "You have one tool, doc_search. Use it to ground every factual claim; never\n"
     "answer civic questions from your own knowledge.\n"
-    "- The only meeting bodies indexed are City Council, School Committee, and\n"
-    "  Planning Board. If the user asks about any other body (e.g. Parking\n"
-    "  Commission, Conservation Commission, Zoning Board), do NOT search and do\n"
-    "  NOT substitute a related body — briefly say that body's documents are not\n"
-    "  indexed, and stop.\n"
-    "- Set the body argument when the user names or clearly implies one of the\n"
-    "  indexed bodies; omit it for general questions so the search spans all\n"
-    "  bodies.\n"
+    "\n"
+    "INDEXED BODIES (ALLOWLIST). The ONLY meeting bodies with indexed documents\n"
+    "are:\n"
+    "  - School Committee\n"
+    "  - City Council\n"
+    "If the user asks about ANY other named body — for example the Parking\n"
+    "Commission, Conservation Commission, Zoning Board of Appeals, Licensing\n"
+    "Board, Planning Board, or any commission/board/authority not on the\n"
+    "allowlist above — you MUST decline: state briefly that that body's documents\n"
+    "are not indexed, and stop. Do NOT search on its behalf. Another body's\n"
+    "documents are NEVER a substitute for the named body: e.g. City Council\n"
+    "parking ordinances are NOT an answer about the Parking Commission, and must\n"
+    "not be offered. Only when a question names no body, or names an allowlisted\n"
+    "body, may you search.\n"
+    "- Set the body argument when the user names or clearly implies an\n"
+    "  allowlisted body; omit it for general questions so the search spans all\n"
+    "  indexed bodies.\n"
     "- Set recency=true (together with body) for 'last / latest / most recent\n"
     "  meeting' questions.\n"
     "- For a follow-up question, use the conversation so far to choose the body,\n"
@@ -208,7 +217,7 @@ def _chat_model() -> AzureChatOpenAI:
         azure_deployment=AZURE_OPENAI_CHAT_DEPLOYMENT,
         api_version=AZURE_OPENAI_API_VERSION,
         azure_ad_token_provider=token_provider,
-        temperature=0.1,  # low temperature: stay faithful to the sources
+        temperature=0,  # deterministic: stay faithful to the sources, no sampling
     )
 
 
