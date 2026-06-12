@@ -114,6 +114,8 @@ RECENCY_TERMS = (
     "latest",
     "most recent",
     "newest",
+    "that meeting",
+    "this meeting",
 )
 
 
