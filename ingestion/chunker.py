@@ -12,6 +12,7 @@ Token counts use tiktoken's ``cl100k_base`` encoding.
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
+from datetime import date as _date
 
 import tiktoken
 
@@ -33,6 +34,7 @@ class Chunk:
     document_date: str
     meeting_body: str
     document_type: str
+    meeting_category: str
     page_number: int
     chunk_id: str
     # Embedding of ``content`` produced by :mod:`embedder` (1536-dim,
@@ -52,12 +54,22 @@ def _sanitize_key(value: str) -> str:
     return "".join(c if c.isalnum() or c in "_-=" else "_" for c in value)
 
 
+def _format_date_human(iso_date: str) -> str:
+    """Return 'January 14, 2026 (2026-01-14)' from '2026-01-14'."""
+    try:
+        d = _date.fromisoformat(iso_date)
+        return f"{d.strftime('%B %-d, %Y')} ({iso_date})"
+    except (ValueError, AttributeError):
+        return iso_date
+
+
 def chunk_pages(
     pages,
     source_url: str,
     document_date: str,
     meeting_body: str,
     document_type: str,
+    meeting_category: str,
     base_id: str,
     chunk_size: int = DEFAULT_CHUNK_SIZE,
     overlap: int = DEFAULT_OVERLAP,
@@ -71,6 +83,7 @@ def chunk_pages(
         document_date: ISO date of the meeting (``YYYY-MM-DD``).
         meeting_body: Committee name.
         document_type: "agenda" or "minutes".
+        meeting_category: "full_committee", "subcommittee" or "negotiations".
         base_id: Stable prefix identifying the source document (e.g. the blob
             name). Used to build unique chunk ids.
         chunk_size: Target tokens per chunk.
@@ -95,6 +108,11 @@ def chunk_pages(
         token_ids.extend(ids)
         token_pages.extend([page_number] * len(ids))
 
+    prefix = (
+        f"{meeting_body} {document_type} — "
+        f"{_format_date_human(document_date)}\n\n"
+    )
+
     chunks: list[Chunk] = []
     step = chunk_size - overlap
     total = len(token_ids)
@@ -109,11 +127,12 @@ def chunk_pages(
             chunks.append(
                 Chunk(
                     id=_sanitize_key(chunk_id),
-                    content=text,
+                    content=prefix + text,
                     source_url=source_url,
                     document_date=document_date,
                     meeting_body=meeting_body,
                     document_type=document_type,
+                    meeting_category=meeting_category,
                     # Attribute the chunk to the page its first token came from.
                     page_number=token_pages[start],
                     chunk_id=chunk_id,
@@ -139,6 +158,7 @@ if __name__ == "__main__":
         document_date="2026-01-01",
         meeting_body="School Committee",
         document_type="minutes",
+        meeting_category="full_committee",
         base_id="example/doc.pdf",
     )
     print(f"{len(out)} chunks")

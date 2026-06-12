@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 from datetime import date
 from functools import lru_cache
 
@@ -192,12 +193,18 @@ def embed(question: str) -> list[float]:
 def resolve_latest_meeting_date(body: str) -> str | None:
     """Return the date of the newest past *minutes* for a body, or None.
 
-    Finds the most recent ``minutes`` document for ``body`` dated on or before
-    today, and returns its ``document_date`` string. Restricting to minutes (not
-    agendas) and to ``document_date le today`` means a future-dated agenda can
-    never masquerade as "the latest meeting" — we anchor on the newest meeting
-    that has an official record. Returns None when the body has no such minutes,
-    letting the caller fall back to the normal retrieval path.
+    Finds the most recent full-committee ``minutes`` document for ``body`` dated
+    on or before today, and returns its ``document_date`` string. Restricting to
+    minutes (not agendas) and to ``document_date le today`` means a future-dated
+    agenda can never masquerade as "the latest meeting" — we anchor on the newest
+    meeting that has an official record. The ``meeting_category eq
+    'full_committee'`` clause mirrors what :func:`retrieve` applies on the recency
+    path: a subcommittee or negotiations session whose minutes are dated later
+    than the last full meeting must not become the anchor date, or retrieve's
+    own full_committee filter would then find nothing and the user would get a
+    decline despite earlier full-committee minutes existing. Returns None when
+    the body has no such minutes, letting the caller fall back to the normal
+    retrieval path.
 
     ``body`` is a controlled constant from BODY_KEYWORDS, never raw user text, so
     it is safe to interpolate into the OData filter.
@@ -206,6 +213,7 @@ def resolve_latest_meeting_date(body: str) -> str | None:
     search_filter = (
         f"meeting_body eq '{body}' "
         f"and document_type eq 'minutes' "
+        f"and meeting_category eq 'full_committee' "
         f"and document_date le '{today}'"
     )
     results = _search_client().search(
@@ -226,6 +234,7 @@ def retrieve(
     vector: list[float],
     meeting_body: str | None = None,
     date_eq: str | None = None,
+    meeting_category: str | None = None,
 ) -> list[dict]:
     """Hybrid search the index: keyword + vector in one request.
 
@@ -242,17 +251,26 @@ def retrieve(
     model is never handed mismatched text to summarise. When the filter yields
     no hits, this returns an empty list and the caller short-circuits.
 
+    ``meeting_category`` is only passed on the "latest meeting" path (see
+    :func:`ask`), where it pins retrieval to ``full_committee`` so a later
+    subcommittee or negotiations session can't be returned as "the last
+    meeting". General queries leave it None and search every category. Like
+    ``meeting_body``, it is a controlled constant, never raw user text, so it is
+    safe to interpolate into the OData filter.
+
     Semantic ranker (query_type="semantic") is intentionally NOT enabled — the
     Free search tier may not support it; we can layer it on later.
     """
-    # Build the OData filter from parts so body and date constraints compose:
-    # both, either, or neither. With neither part this stays None (search
+    # Build the OData filter from parts so body, date and category constraints
+    # compose: any combination, or none. With no parts this stays None (search
     # everything) — the original unchanged behaviour.
     filter_parts = []
     if meeting_body:
         filter_parts.append(f"meeting_body eq '{meeting_body}'")
     if date_eq:
         filter_parts.append(f"document_date eq '{date_eq}'")
+    if meeting_category:
+        filter_parts.append(f"meeting_category eq '{meeting_category}'")
     search_filter = " and ".join(filter_parts) if filter_parts else None
 
     # When pinned to one meeting's date, lift the cap so the whole meeting comes
@@ -326,10 +344,10 @@ def answer(question: str, context: str) -> str:
     return response.choices[0].message.content or ""
 
 
-def _format_sources(chunks: list[dict]) -> str:
+def _format_sources(chunks: list[tuple[int, dict]]) -> str:
     """Render the numbered source list for CLI display (matches citation order)."""
     lines = []
-    for i, c in enumerate(chunks, start=1):
+    for n, c in chunks:
         header_bits = [
             c.get("meeting_body"),
             c.get("document_type"),
@@ -339,11 +357,11 @@ def _format_sources(chunks: list[dict]) -> str:
         url = c.get("source_url", "")
         page = c.get("page_number")
         page_str = f", p.{page}" if page is not None else ""
-        lines.append(f"[{i}] {header}{page_str}\n    {url}")
+        lines.append(f"[{n}] {header}{page_str}\n    {url}")
     return "\n".join(lines)
 
 
-def ask(question: str) -> tuple[str, list[dict]]:
+def ask(question: str) -> tuple[str, list[tuple[int, dict]]]:
     """Run one full RAG pass and return (answer_text, source_chunks).
 
     The single source of truth for the query loop, shared by the CLI (main)
@@ -364,7 +382,15 @@ def ask(question: str) -> tuple[str, list[dict]]:
     if recency:
         latest_date = resolve_latest_meeting_date(body)
         if latest_date:
-            chunks = retrieve(question, vector, meeting_body=body, date_eq=latest_date)
+            # Pin to the full committee meeting so a subcommittee/negotiations
+            # session dated the same day can't leak in as "the last meeting".
+            chunks = retrieve(
+                question,
+                vector,
+                meeting_body=body,
+                date_eq=latest_date,
+                meeting_category="full_committee",
+            )
         else:
             chunks = retrieve(question, vector, meeting_body=body)
     else:
@@ -379,7 +405,10 @@ def ask(question: str) -> tuple[str, list[dict]]:
         return ("No matching documents were found in the index.", [])
 
     context = build_context(chunks)
-    return (answer(question, context), chunks)
+    answer_text = answer(question, context)
+    cited_ns = {int(n) for n in re.findall(r'\[(\d+)\]', answer_text)}
+    chunks = [(i, c) for i, c in enumerate(chunks, 1) if i in cited_ns]
+    return (answer_text, chunks)
 
 
 def main() -> None:

@@ -107,7 +107,7 @@ def ask_endpoint(request: AskRequest) -> AskResponse:
     answer_text, chunks = query.ask(request.question)
     return AskResponse(
         answer=answer_text,
-        sources=[_to_source(c, i) for i, c in enumerate(chunks, start=1)],
+        sources=[_to_source(c, n) for n, c in chunks],
     )
 
 
