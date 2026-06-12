@@ -386,11 +386,8 @@ def ask(question: str, history: list[dict] | None = None) -> tuple[str, list[tup
     # A follow-up may not re-name the body the conversation is about
     # ("what about the budget?"). Fall back to detecting it from the last
     # user turn so retrieval stays scoped to the right body.
-    body_from_history = False
     if body is None and last_user:
         body = detect_body(last_user)
-        if body is not None:
-            body_from_history = True
 
     # When follow-up questions use pronouns or elliptical references
     # ("that meeting", "who proposed it"), the retrieval query is
@@ -407,10 +404,7 @@ def ask(question: str, history: list[dict] | None = None) -> tuple[str, list[tup
     # chunk of that one meeting is returned. If the body has no qualifying minutes
     # (resolve returns None), fall through to the normal retrieve path unchanged.
     # Every other query keeps the existing behaviour exactly.
-    recency = body is not None and (
-        any(t in question.lower() for t in RECENCY_TERMS)
-        or body_from_history
-    )
+    recency = body is not None and any(t in question.lower() for t in RECENCY_TERMS)
     if recency:
         latest_date = resolve_latest_meeting_date(body)
         if latest_date:
