@@ -223,6 +223,8 @@ TOOLS = [doc_search, schedule_lookup]
 TOOL_GUIDANCE = (
     "\n\nTOOLS — route by what the question is asking.\n"
     "Never answer civic questions from your own knowledge; use a tool.\n"
+    "This applies to declines too: never state that the documents don't cover something unless\n"
+    "doc_search has already returned nothing relevant for it.\n"
     "\n"
     "1) doc_search — what was DISCUSSED, DECIDED, VOTED, or SAID at a meeting\n"
     "   (the content of agendas and minutes).\n"
