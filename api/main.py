@@ -19,9 +19,11 @@ from __future__ import annotations
 
 from typing import Literal
 
-from fastapi import FastAPI
-from fastapi.responses import HTMLResponse
+from fastapi import FastAPI, Request
+from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, Field
+from slowapi import Limiter
+from slowapi.errors import RateLimitExceeded
 
 # Import the module (not the bare name) so the shared RAG entry point and its
 # Azure clients are initialised exactly once, lazily, on first request.
@@ -32,6 +34,53 @@ app = FastAPI(
     description="Civic AI assistant answering questions about Gloucester, MA municipal documents.",
     version="0.1.0",
 )
+
+
+# --- Rate limiting for POST /ask ------------------------------------------
+# Applies to /ask only — GET / and GET /health are left unlimited (rate-limiting
+# the liveness probe would restart-loop the container). Two independent limits,
+# named here so they're easy to tune. Storage is slowapi's default in-memory
+# backend, which is authoritative because Container Apps runs a single replica
+# (max-replicas=1) — no external store needed.
+PER_IP_RATE_LIMIT = "10/minute"   # per real client IP
+GLOBAL_RATE_LIMIT = "30/minute"   # all IPs combined
+# Constant key that buckets every /ask request together for the global cap.
+_GLOBAL_BUCKET_KEY = "__all__"
+# Both limits use a 60s window, so a flat Retry-After is accurate enough.
+_RETRY_AFTER_SECONDS = "60"
+_RATE_LIMIT_MESSAGE = (
+    "You're sending requests too quickly — please wait a moment and try again."
+)
+
+
+def _client_ip(request: Request) -> str:
+    """Per-IP rate-limit key: the *real* client IP.
+
+    Container Apps' ingress is a reverse proxy, so ``request.client.host`` is the
+    ingress IP — keying on it would throttle every user as one bucket. Read the
+    left-most entry of ``X-Forwarded-For`` (the originating client) and fall back
+    to the socket peer only when the header is absent.
+    """
+    forwarded = request.headers.get("x-forwarded-for")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
+
+
+# Default key_func is the per-IP function above; the global limit overrides it
+# with a constant key on its own decorator. Default storage is memory://.
+limiter = Limiter(key_func=_client_ip)
+app.state.limiter = limiter
+
+
+@app.exception_handler(RateLimitExceeded)
+def _rate_limit_handler(request: Request, exc: RateLimitExceeded) -> JSONResponse:
+    """Friendly 429 for either limit: small JSON body + Retry-After header."""
+    return JSONResponse(
+        status_code=429,
+        content={"detail": _RATE_LIMIT_MESSAGE},
+        headers={"Retry-After": _RETRY_AFTER_SECONDS},
+    )
 
 
 class Message(BaseModel):
@@ -106,15 +155,21 @@ def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
+# Two stacked limits: the inner decorator caps each IP (default key_func), the
+# outer one caps all traffic combined via the constant bucket key. Exceeding
+# either raises RateLimitExceeded -> _rate_limit_handler (429). slowapi requires
+# the `request: Request` parameter; the JSON body is `body: AskRequest`.
 @app.post("/ask", response_model=AskResponse)
-def ask_endpoint(request: AskRequest) -> AskResponse:
+@limiter.limit(GLOBAL_RATE_LIMIT, key_func=lambda request: _GLOBAL_BUCKET_KEY)
+@limiter.limit(PER_IP_RATE_LIMIT)
+def ask_endpoint(request: Request, body: AskRequest) -> AskResponse:
     """Answer a question about Gloucester civic documents via RAG.
 
     Delegates the whole retrieval-and-generation pass to ``query.ask`` and only
     reshapes its (answer, chunks) tuple into JSON.
     """
-    history = [{"role": m.role, "content": m.content} for m in request.history]
-    answer_text, chunks = query.ask(request.question, history=history or None)
+    history = [{"role": m.role, "content": m.content} for m in body.history]
+    answer_text, chunks = query.ask(body.question, history=history or None)
     return AskResponse(
         answer=answer_text,
         sources=[_to_source(c, n) for n, c in chunks],
@@ -420,6 +475,12 @@ INDEX_HTML = """\
           body: JSON.stringify({ question: q, history }),
         });
         typing.remove();
+        // Rate limited (per-IP or global cap on /ask): show the server's
+        // friendly message in the thread rather than the generic error path.
+        if (res.status === 429) {
+          addError("You're sending requests too quickly — please wait a moment and try again.");
+          return;
+        }
         if (!res.ok) throw new Error("Server error (" + res.status + "). Please try again.");
         const data = await res.json();
         addAssistant(data.answer, data.sources);
