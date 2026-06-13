@@ -105,9 +105,15 @@ def doc_search(
         body: The meeting body when the user named or clearly implied one. Must be
             exactly one of "City Council", "School Committee", or "Planning Board".
             Omit to search across all bodies.
-        recency: True when the user asks about the most recent / last / latest
-            meeting of a body. Requires ``body``; pins the search to that body's
-            newest past full-committee minutes.
+        recency: Set recency=True ONLY for questions explicitly about the most
+            recent / last / latest / upcoming meeting of a body (e.g. "what
+            happened at the last City Council meeting", "when does the School
+            Committee next meet"). Leave False for topical/subject questions —
+            anything about a topic, project, budget, vote, or decision ("what's
+            the budget", "the library project", "the FY27 appropriations") — even
+            if recent documents seem most relevant. recency pins retrieval to a
+            single most-recent-meeting date; using it on a topical question hides
+            relevant content from other dates. Requires ``body``.
         target_date: A single meeting date as YYYY-MM-DD, set ONLY when the user
             (or the prior turn) names ONE specific meeting day, e.g. "the May 13
             meeting" or "the March 4th agenda". This is an exact-date match, so a
@@ -237,8 +243,12 @@ TOOL_GUIDANCE = (
     "   indexed, and stop. Do NOT search on its behalf and NEVER substitute\n"
     "   another body's documents (e.g. City Council parking ordinances are not an\n"
     "   answer about the Parking Commission). Set body only for an allowlisted\n"
-    "   body; omit it to span both. Set recency=true (with body) for 'last /\n"
-    "   latest / most recent meeting'. For a follow-up, reuse the conversation to\n"
+    "   body; omit it to span both. Set recency=true (with body) ONLY for\n"
+    "   'last / latest / most recent / next meeting' questions; leave it false for\n"
+    "   topical/subject questions (a topic, project, budget, vote, or decision —\n"
+    "   'what's the budget', 'the FY27 appropriations') even if recent docs seem\n"
+    "   most relevant, since recency pins retrieval to one meeting date and hides\n"
+    "   other dates. For a follow-up, reuse the conversation to\n"
     "   pick the body and pass the prior meeting's date as target_date. Cite\n"
     "   sources by their bracketed number exactly as shown, e.g. [1] or [2][3];\n"
     "   if a search returns nothing, say so — never invent sources.\n"
