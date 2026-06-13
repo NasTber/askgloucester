@@ -185,151 +185,132 @@ INDEX_HTML = """\
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>AskGloucester</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=Public+Sans:wght@400;500;600&display=swap" rel="stylesheet">
   <style>
-    :root {
-      --ink: #1a2733; --muted: #5c6b7a; --accent: #154d7a;
-      --accent-press: #0f3a5c; --line: #d8e0e6; --bg: #f4f6f8;
-      --error: #9b2226;
+    :root{
+      --navy:#1E3E80; --navy-deep:#162F61; --navy-soft:#E9EEF7;
+      --ink:#1C2A3F; --ink-soft:#43536A; --page:#F2F5FA; --surface:#FFFFFF;
+      --accent:#2C66AB; --maroon:#581824; --maroon-deep:#43121B;
+      --maroon-soft:#F4E8EB; --maroon-line:#E4CDD2; --muted:#5C6776;
+      --hairline:#DBE2EE;
     }
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-    html, body { height: 100%; }
-    body {
-      display: flex; flex-direction: column;
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
-                   Helvetica, Arial, sans-serif;
-      color: var(--ink); background: var(--bg); line-height: 1.55;
+    *{box-sizing:border-box;}
+    html,body{margin:0;padding:0;}
+    body{
+      font-family:'Public Sans',system-ui,sans-serif;
+      color:var(--ink); background:var(--page); line-height:1.6;
+      -webkit-font-smoothing:antialiased;
+      min-height:100vh; display:flex; flex-direction:column;
     }
-    header {
-      flex-shrink: 0; padding: 0.9rem 1.25rem;
-      background: #fff; border-bottom: 2px solid var(--accent);
+
+    header{ background:var(--navy); color:#F6F8FC; border-bottom:3px solid var(--navy-deep); }
+    .bar{ max-width:860px; margin:0 auto; padding:16px 24px; display:flex; align-items:center; gap:14px; }
+    .mark{ width:30px; height:30px; flex:0 0 auto; color:#9FB6DD; }
+    .wordmark{ font-family:'Fraunces',serif; font-weight:600; font-size:24px; letter-spacing:0.2px; line-height:1; color:#F6F8FC; }
+    .tag{ font-size:11px; font-weight:700; letter-spacing:0.6px; text-transform:uppercase; color:var(--navy); background:#fff; border:none; padding:3px 9px; border-radius:999px; white-space:nowrap; }
+
+    main{ flex:1; width:100%; max-width:860px; margin:0 auto; padding:28px 24px 8px; }
+    .welcome{ color:var(--muted); font-size:15px; text-align:center; padding:40px 12px; max-width:560px; margin:6px auto 0; }
+    .turn{ margin-bottom:22px; }
+    .who{ font-size:12px; letter-spacing:0.5px; text-transform:uppercase; color:var(--muted); margin:0 0 7px 2px; font-weight:600; }
+    .user .bubble{ background:var(--navy-soft); border:1px solid #D4DEF0; border-left:3px solid var(--navy); color:var(--ink); border-radius:12px; padding:13px 16px; font-size:16px; max-width:80%; }
+    .bot .card{ background:var(--surface); border:1px solid var(--hairline); border-radius:14px; padding:18px 20px; font-size:16px; box-shadow:0 1px 0 rgba(28,42,63,0.03); white-space:pre-wrap; }
+    .bot .card.error{ border-color:var(--maroon-line); background:var(--maroon-soft); color:var(--maroon-deep); }
+    .bot p{ margin:0 0 12px; }
+    .bot ul{ margin:0 0 12px; padding-left:18px; }
+    .bot li{ margin:0 0 7px; }
+    .bot p:last-child,.bot ul:last-child{ margin-bottom:0; }
+    .bot .card a.link{color:var(--accent);text-decoration:underline;text-underline-offset:2px;word-break:break-word;}
+    .bot .card a.link:hover{color:var(--navy-deep);}
+
+    .cite{
+      display:inline-flex; align-items:center; justify-content:center;
+      min-width:18px; height:18px; padding:0 5px; margin:0 1px; vertical-align:1px;
+      font-size:11px; font-weight:600; color:var(--maroon);
+      background:var(--maroon-soft); border:1px solid var(--maroon-line);
+      border-radius:5px; text-decoration:none; cursor:pointer;
+      transition:background .12s,color .12s,border-color .12s;
     }
-    header h1 { font-size: 1.4rem; color: var(--accent); }
-    header p  { font-size: 0.88rem; color: var(--muted); margin-top: 0.1rem; }
-    .beta {
-      display: inline-block;
-      margin-top: 0.4rem;
-      font-size: 0.78rem;
-      color: #fff;
-      background: var(--accent);
-      padding: 0.15rem 0.5rem;
-      border-radius: 4px;
-      letter-spacing: 0.03em;
+    .cite:hover{ background:var(--maroon); color:#fff; border-color:var(--maroon); }
+
+    details.sources{ margin-top:14px; border-top:1px solid var(--hairline); padding-top:11px; }
+    details.sources summary{ cursor:pointer; list-style:none; font-size:13px; font-weight:600; color:var(--accent); display:flex; align-items:center; gap:6px; }
+    details.sources summary::-webkit-details-marker{ display:none; }
+    details.sources summary .chev{ transition:transform .15s; font-size:13px; }
+    details.sources[open] summary .chev{ transform:rotate(90deg); }
+    .src{ display:flex; gap:10px; align-items:baseline; font-size:13.5px; color:var(--ink-soft); padding:8px 0 0; }
+    .src .n{ flex:0 0 auto; font-weight:600; color:var(--maroon); font-size:12px; min-width:16px; }
+    .src a{ color:var(--accent); text-decoration:none; word-break:break-word; }
+    .src a:hover{ text-decoration:underline; }
+
+    .typing{display:inline-flex;gap:5px;align-items:center;padding:2px 0;}
+    .typing span{width:7px;height:7px;border-radius:50%;background:var(--maroon);animation:blink 1.2s infinite both;}
+    .typing span:nth-child(2){animation-delay:.18s;}
+    .typing span:nth-child(3){animation-delay:.36s;}
+    @keyframes blink{0%,80%,100%{opacity:.25;}40%{opacity:.95;}}
+
+    .composer-wrap{ position:sticky; bottom:0; background:linear-gradient(to bottom, rgba(242,245,250,0) 0%, var(--page) 38%); padding:14px 0 18px; }
+    .composer{ max-width:860px; margin:0 auto; padding:0 24px; }
+    .field{ display:flex; align-items:flex-end; gap:10px; background:var(--surface); border:1px solid var(--hairline); border-radius:16px; padding:8px 8px 8px 16px; box-shadow:0 2px 10px rgba(28,42,63,0.05); }
+    .field:focus-within{ border-color:var(--accent); box-shadow:0 0 0 3px rgba(44,102,171,0.16); }
+    .field textarea{ flex:1; border:0; outline:0; resize:none; background:transparent; font-family:inherit; font-size:16px; color:var(--ink); padding:9px 0; max-height:120px; line-height:1.45; }
+    .field textarea::placeholder{ color:#8893A4; }
+    .send{ flex:0 0 auto; border:0; border-radius:11px; background:var(--maroon); color:#fff; height:40px; padding:0 16px; font-family:inherit; font-size:15px; font-weight:600; display:inline-flex; align-items:center; gap:7px; cursor:pointer; transition:background .14s,transform .06s; }
+    .send:hover{ background:var(--maroon-deep); }
+    .send:active{ transform:scale(0.98); }
+    .send:disabled{ opacity:0.6; cursor:progress; }
+    .send svg{ width:16px; height:16px; }
+
+    footer{ max-width:860px; margin:0 auto; padding:6px 24px 22px; font-size:12.5px; color:var(--muted); line-height:1.5; }
+    footer .anchor{ color:var(--accent); text-decoration:none; }
+
+    @media (max-width:560px){
+      .wordmark{ font-size:21px; }
+      .user .bubble{ max-width:92%; }
+      main{ padding-top:20px; }
     }
-    #thread {
-      flex: 1 1 0; overflow-y: auto; padding: 1.25rem;
-      display: flex; flex-direction: column; gap: 1rem;
-      max-width: 700px; width: 100%; margin: 0 auto;
-    }
-    #welcome {
-      margin: auto; text-align: center;
-      color: var(--muted); padding: 2rem; font-size: 0.97rem;
-    }
-    .msg { display: flex; flex-direction: column; max-width: 85%; }
-    .msg.user      { align-self: flex-end;   align-items: flex-end; }
-    .msg.assistant { align-self: flex-start; align-items: flex-start; }
-    .bubble {
-      padding: 0.65rem 0.95rem; border-radius: 14px; font-size: 0.96rem;
-    }
-    .msg.user .bubble {
-      background: var(--accent); color: #fff; border-bottom-right-radius: 3px;
-    }
-    .msg.assistant .bubble {
-      background: #fff; border: 1px solid var(--line);
-      border-bottom-left-radius: 3px; white-space: pre-wrap;
-    }
-    .sources { margin-top: 0.45rem; }
-    .src-toggle {
-      background: none; border: none; cursor: pointer;
-      color: var(--accent); font-size: 0.82rem; padding: 0;
-    }
-    .src-toggle:hover { text-decoration: underline; }
-    .src-list {
-      display: none; margin-top: 0.3rem; padding-left: 1.1rem;
-      font-size: 0.82rem; color: var(--muted);
-    }
-    .src-list.open { display: block; }
-    .src-list li { margin-bottom: 0.3rem; }
-    .src-list a { color: var(--accent); word-break: break-word; }
-    /* Inline citation chips: [n] in the answer is rendered as a small
-       superscript link to its source. */
-    .cite {
-      font-size: 0.68em; vertical-align: super; line-height: 0;
-      font-weight: 600; color: var(--accent); text-decoration: none;
-      background: #e7eef4; border-radius: 4px;
-      padding: 0.05em 0.32em; margin: 0 0.08em;
-    }
-    a.cite:hover { text-decoration: underline; }
-    .typing {
-      align-self: flex-start; display: flex; gap: 5px;
-      padding: 0.75rem 1rem; background: #fff;
-      border: 1px solid var(--line); border-radius: 14px;
-      border-bottom-left-radius: 3px;
-    }
-    .dot {
-      width: 7px; height: 7px; border-radius: 50%;
-      background: var(--muted); animation: bounce 1.2s infinite;
-    }
-    .dot:nth-child(2) { animation-delay: 0.2s; }
-    .dot:nth-child(3) { animation-delay: 0.4s; }
-    @keyframes bounce {
-      0%,60%,100% { transform: translateY(0); }
-      30%          { transform: translateY(-5px); }
-    }
-    .err-bubble {
-      background: #fff5f5; border: 1px solid #f5c6c6;
-      color: var(--error); padding: 0.65rem 0.95rem;
-      border-radius: 14px; font-size: 0.95rem;
-    }
-    #input-bar {
-      flex-shrink: 0; padding: 0.8rem 1.25rem;
-      background: #fff; border-top: 1px solid var(--line);
-    }
-    #input-inner {
-      display: flex; gap: 0.5rem;
-      max-width: 700px; margin: 0 auto;
-    }
-    #question {
-      flex: 1; padding: 0.65rem 0.85rem; font-size: 0.97rem;
-      border: 1px solid var(--line); border-radius: 8px;
-      background: var(--bg); color: var(--ink);
-    }
-    #question:focus {
-      outline: 2px solid var(--accent); outline-offset: 1px;
-      border-color: var(--accent);
-    }
-    #submit {
-      padding: 0.65rem 1.1rem; font-size: 0.97rem; font-weight: 600;
-      color: #fff; background: var(--accent); border: 0;
-      border-radius: 8px; cursor: pointer; white-space: nowrap;
-    }
-    #submit:hover    { background: var(--accent-press); }
-    #submit:disabled { opacity: 0.6; cursor: progress; }
+    @media (prefers-reduced-motion:reduce){ *{ transition:none!important; } }
   </style>
 </head>
 <body>
   <header>
-    <h1>AskGloucester</h1>
-    <p>Ask questions about Gloucester, MA public meetings</p>
-    <p class="beta">Beta · Document Q&amp;A: School Committee &amp; City Council ·
-  Meeting schedules: city-wide · Answers may be incomplete</p>
+    <div class="bar">
+      <svg class="mark" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <circle cx="12" cy="12" r="10.2" stroke="currentColor" stroke-width="1.3"/>
+        <path d="M12 2.5 L13.7 10.3 L21.5 12 L13.7 13.7 L12 21.5 L10.3 13.7 L2.5 12 L10.3 10.3 Z" fill="currentColor"/>
+      </svg>
+      <span class="wordmark">AskGloucester</span>
+      <span class="tag">Beta</span>
+    </div>
   </header>
 
-  <div id="thread">
-    <div id="welcome">
+  <main id="thread">
+    <div id="welcome" class="welcome">
       Ask what was discussed or decided at City Council and School Committee
       meetings, or when any Gloucester public body meets.
     </div>
-  </div>
+  </main>
 
-  <div id="input-bar">
-    <div id="input-inner">
-      <input id="question" type="text" autocomplete="off"
-             placeholder="What was discussed at the last City Council meeting?">
-      <button id="submit">Ask</button>
+  <div class="composer-wrap">
+    <div class="composer">
+      <div class="field">
+        <textarea id="question" rows="1" autocomplete="off"
+                  placeholder="Ask about a meeting, schedule, or city service…"
+                  aria-label="Ask a question"></textarea>
+        <button id="submit" class="send" type="button">
+          Ask
+          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M5 12h13M13 6l6 6-6 6" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+      </div>
     </div>
+    <footer>
+      AskGloucester is an AI and can make mistakes — please double-check important information on the <a class="anchor" href="https://www.gloucester-ma.gov" target="_blank" rel="noopener noreferrer">city website</a>.
+    </footer>
   </div>
 
   <script>
@@ -340,6 +321,12 @@ INDEX_HTML = """\
 
     let history = [];
 
+    // The whole page scrolls (sticky composer pins to the bottom), so keep the
+    // newest turn in view by scrolling the document, not an inner container.
+    function scrollDown() {
+      window.scrollTo(0, document.body.scrollHeight);
+    }
+
     function srcLabel(s) {
       const p = [s.meeting_body, s.document_type, s.document_date].filter(Boolean);
       let t = p.join(" \u2014 ") || "Source";
@@ -347,38 +334,90 @@ INDEX_HTML = """\
       return t;
     }
 
+    // div.turn.user > p.who("You") + div.bubble
     function addUser(text) {
       welcome.style.display = "none";
-      const d = document.createElement("div");
-      d.className = "msg user";
+      const turn = document.createElement("div");
+      turn.className = "turn user";
+      const who = document.createElement("p");
+      who.className = "who";
+      who.textContent = "You";
       const b = document.createElement("div");
       b.className = "bubble";
       b.textContent = text;
-      d.appendChild(b);
-      thread.appendChild(d);
-      thread.scrollTop = thread.scrollHeight;
+      turn.appendChild(who);
+      turn.appendChild(b);
+      thread.appendChild(turn);
+      scrollDown();
     }
 
+    // Loading state: div.turn.bot > p.who + div.card > div.typing(3 spans).
+    // Returns the whole turn so the caller can remove it on response.
     function addTyping() {
-      const d = document.createElement("div");
-      d.className = "typing";
-      for (let i = 0; i < 3; i++) {
-        const dot = document.createElement("div");
-        dot.className = "dot";
-        d.appendChild(dot);
-      }
-      thread.appendChild(d);
-      thread.scrollTop = thread.scrollHeight;
-      return d;
+      welcome.style.display = "none";
+      const turn = document.createElement("div");
+      turn.className = "turn bot";
+      const who = document.createElement("p");
+      who.className = "who";
+      who.textContent = "AskGloucester";
+      const card = document.createElement("div");
+      card.className = "card";
+      const typing = document.createElement("div");
+      typing.className = "typing";
+      for (let i = 0; i < 3; i++) typing.appendChild(document.createElement("span"));
+      card.appendChild(typing);
+      turn.appendChild(who);
+      turn.appendChild(card);
+      thread.appendChild(turn);
+      scrollDown();
+      return turn;
     }
 
-    // Render the answer into `bubble`, turning numeric [n] markers into small
-    // superscript citation chips that link to source n. Pure display transform:
-    // the [n] stay in the model output / API response; we only change how they
-    // look. Built with text nodes + createElement (never innerHTML on model
-    // output), so an answer can't inject markup. Non-numeric bracketed tokens
-    // (e.g. a stray [toolname]) are left untouched as plain text.
-    function renderAnswer(bubble, text, sources) {
+    // Linkify bare http(s) URLs inside a single plain-text answer segment.
+    // Runs ONLY on answer prose (the calendar/schedule channel emits its
+    // source_url inline as plain text); never on .cite chips or .src rows.
+    // XSS-safe: the URL goes in via textContent + .href, never innerHTML.
+    function appendLinkified(container, text) {
+      const re = /https?:\\/\\/[^\\s]+/g;
+      let last = 0, m;
+      while ((m = re.exec(text)) !== null) {
+        let url = m[0];
+        // Trailing punctuation belongs to the prose, not the URL — strip it
+        // off the match and re-emit it as plain text after the link.
+        const trail = (url.match(/[.,;:!?)\\]}'"]+$/) || [""])[0];
+        if (trail) url = url.slice(0, url.length - trail.length);
+        // Text before the URL.
+        if (m.index > last) {
+          container.appendChild(document.createTextNode(text.slice(last, m.index)));
+        }
+        // Guard: only real http(s) URLs become anchors; else leave as text.
+        if (url.indexOf("http://") === 0 || url.indexOf("https://") === 0) {
+          const a = document.createElement("a");
+          a.textContent = url;
+          a.href = url;
+          a.target = "_blank";
+          a.rel = "noopener noreferrer";
+          a.className = "link";
+          container.appendChild(a);
+        } else if (url) {
+          container.appendChild(document.createTextNode(url));
+        }
+        if (trail) container.appendChild(document.createTextNode(trail));
+        last = m.index + m[0].length;
+      }
+      // Remaining prose after the last URL (or the whole string if no match).
+      if (last < text.length) {
+        container.appendChild(document.createTextNode(text.slice(last)));
+      }
+    }
+
+    // Render the answer into `card`, turning numeric [n] markers into small
+    // citation chips that link to source n. Pure display transform: the [n]
+    // stay in the model output / API response; we only change how they look.
+    // Built with text nodes + createElement (never innerHTML on model output),
+    // so an answer can't inject markup. Non-numeric bracketed tokens (e.g. a
+    // stray [toolname]) are left untouched as plain text.
+    function renderAnswer(card, text, sources) {
       const byN = {};
       (sources || []).forEach(s => { byN[s.n] = s; });
       // Capturing split: even indices are literal text, odd indices are the
@@ -399,66 +438,82 @@ INDEX_HTML = """\
             chip.target = "_blank";
             chip.rel = "noopener noreferrer";
           }
-          bubble.appendChild(chip);
+          card.appendChild(chip);
         } else if (part) {
-          bubble.appendChild(document.createTextNode(part));
+          appendLinkified(card, part);
         }
       });
     }
 
+    // div.turn.bot > p.who("AskGloucester") + div.card (answer + sources)
     function addAssistant(text, sources) {
-      const d = document.createElement("div");
-      d.className = "msg assistant";
-
-      const b = document.createElement("div");
-      b.className = "bubble";
-      renderAnswer(b, text, sources);
-      d.appendChild(b);
+      const turn = document.createElement("div");
+      turn.className = "turn bot";
+      const who = document.createElement("p");
+      who.className = "who";
+      who.textContent = "AskGloucester";
+      const card = document.createElement("div");
+      card.className = "card";
+      renderAnswer(card, text, sources);
 
       if (sources && sources.length) {
-        const wrap   = document.createElement("div");
-        wrap.className = "sources";
-        const toggle = document.createElement("button");
-        toggle.className = "src-toggle";
-        toggle.textContent = "\u25b8 " + sources.length +
-          " source" + (sources.length === 1 ? "" : "s");
-        const list = document.createElement("ol");
-        list.className = "src-list";
+        // details.sources > summary(span.chev + "Sources (N)") + div.src*
+        const det = document.createElement("details");
+        det.className = "sources";
+        const sum = document.createElement("summary");
+        const chev = document.createElement("span");
+        chev.className = "chev";
+        chev.textContent = "\u203a";            // chevron, rotates via CSS when open
+        sum.appendChild(chev);
+        sum.appendChild(document.createTextNode(
+          " Sources (" + sources.length + ")"));
+        det.appendChild(sum);
         sources.forEach(s => {
-          const li = document.createElement("li");
+          const row = document.createElement("div");
+          row.className = "src";
+          const num = document.createElement("span");
+          num.className = "n";
+          num.textContent = s.n;
+          const txt = document.createElement("span");
+          txt.textContent = srcLabel(s);
+          row.appendChild(num);
+          row.appendChild(txt);
           if (s.source_url) {
+            txt.appendChild(document.createTextNode(" \u00b7 "));
             const a = document.createElement("a");
-            a.href = s.source_url; a.target = "_blank";
+            a.href = s.source_url;
+            a.target = "_blank";
             a.rel = "noopener noreferrer";
-            a.textContent = srcLabel(s);
-            li.appendChild(a);
-          } else {
-            li.textContent = srcLabel(s);
+            let host = s.source_url;
+            try { host = new URL(s.source_url).hostname; } catch (e) {}
+            a.textContent = host;
+            txt.appendChild(a);
           }
-          list.appendChild(li);
+          det.appendChild(row);
         });
-        toggle.addEventListener("click", () => {
-          const open = list.classList.toggle("open");
-          toggle.textContent = (open ? "\u25be " : "\u25b8 ") +
-            sources.length + " source" + (sources.length === 1 ? "" : "s");
-        });
-        wrap.appendChild(toggle); wrap.appendChild(list);
-        d.appendChild(wrap);
+        card.appendChild(det);
       }
 
-      thread.appendChild(d);
-      thread.scrollTop = thread.scrollHeight;
+      turn.appendChild(who);
+      turn.appendChild(card);
+      thread.appendChild(turn);
+      scrollDown();
     }
 
+    // Errors reuse the bot turn shape with an error-tinted card.
     function addError(msg) {
-      const d = document.createElement("div");
-      d.className = "msg assistant";
-      const b = document.createElement("div");
-      b.className = "err-bubble";
-      b.textContent = msg;
-      d.appendChild(b);
-      thread.appendChild(d);
-      thread.scrollTop = thread.scrollHeight;
+      const turn = document.createElement("div");
+      turn.className = "turn bot";
+      const who = document.createElement("p");
+      who.className = "who";
+      who.textContent = "AskGloucester";
+      const card = document.createElement("div");
+      card.className = "card error";
+      card.textContent = msg;
+      turn.appendChild(who);
+      turn.appendChild(card);
+      thread.appendChild(turn);
+      scrollDown();
     }
 
     async function send() {
