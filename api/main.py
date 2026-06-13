@@ -43,13 +43,17 @@ app = FastAPI(
 # JSONResponse is the `response` here, since middleware wraps the whole call
 # stack). The inline <script> in INDEX_HTML carries a matching nonce, so the
 # CSP can forbid all other inline script without breaking the page.
-@app.middleware("http")
-async def _security_headers(request: Request, call_next):
-    # Fresh, unguessable nonce per request; stash it before the handler runs so
-    # GET / can read it back and stamp the same value onto its <script> tag.
-    nonce = secrets.token_urlsafe(16)
-    request.state.csp_nonce = nonce
-    response = await call_next(request)
+# Hard ceiling on the raw request body. 512 KiB sits far above any legitimate
+# /ask payload (a 2000-char question + 20 history turns capped at 12000 chars
+# each is well under this once JSON-encoded) but rejects a multi-megabyte body
+# before Starlette reads it into memory.
+_MAX_BODY_BYTES = 512 * 1024
+
+
+def _apply_security_headers(response, nonce: str) -> None:
+    """Stamp the 6 security headers (incl. the per-request CSP nonce) onto any
+    response — the normal path and the early 413 backstop both go through here,
+    so neither can go out header-less."""
     response.headers["Content-Security-Policy"] = (
         "default-src 'self'; "
         f"script-src 'self' 'nonce-{nonce}'; "
@@ -71,6 +75,34 @@ async def _security_headers(request: Request, call_next):
     response.headers["Permissions-Policy"] = (
         "geolocation=(), camera=(), microphone=()"
     )
+
+
+@app.middleware("http")
+async def _security_headers(request: Request, call_next):
+    # Fresh, unguessable nonce per request; stash it before the handler runs so
+    # GET / can read it back and stamp the same value onto its <script> tag.
+    nonce = secrets.token_urlsafe(16)
+    request.state.csp_nonce = nonce
+
+    # Body-size backstop: reject an oversized body up front, before call_next
+    # lets the framework read it. Content-Length can be spoofed/absent, but an
+    # honest large upload announces itself here and is cheaply refused; the
+    # 413 still carries the full security-header set.
+    content_length = request.headers.get("content-length")
+    if content_length is not None:
+        try:
+            too_large = int(content_length) > _MAX_BODY_BYTES
+        except ValueError:
+            too_large = False
+        if too_large:
+            early = JSONResponse(
+                status_code=413, content={"detail": "Request too large."}
+            )
+            _apply_security_headers(early, nonce)
+            return early
+
+    response = await call_next(request)
+    _apply_security_headers(response, nonce)
     return response
 
 
@@ -123,16 +155,23 @@ def _rate_limit_handler(request: Request, exc: RateLimitExceeded) -> JSONRespons
 
 class Message(BaseModel):
     role: Literal["user", "assistant"]
-    content: str
+    # max_length is sized to hold a long assistant answer carried back as
+    # history (12000 chars ~ a multi-paragraph reply with sources), so legit
+    # history is never rejected; min_length=1 drops empty turns.
+    content: str = Field(..., min_length=1, max_length=12000)
 
 
 class AskRequest(BaseModel):
     """Body for POST /ask."""
 
-    # min_length=1 rejects empty/whitespace-only questions at the edge so we
-    # never spend an embedding call on nothing.
-    question: str = Field(..., min_length=1, description="The question to ask.")
-    history: list[Message] = Field(default_factory=list,
+    # All three caps are validated before the rate bucket and before any LLM
+    # call: an over-cap body is a cheap 422, never a wasted embedding.
+    # min_length=1 rejects empty/whitespace-only questions; max_length=2000
+    # bounds the prompt.
+    question: str = Field(..., min_length=1, max_length=2000,
+        description="The question to ask.")
+    # max_length on a list field caps item count: 20 turns = 10 exchanges.
+    history: list[Message] = Field(default_factory=list, max_length=20,
         description="Prior turns, alternating user/assistant.")
 
 
@@ -345,7 +384,7 @@ INDEX_HTML = """\
   <div class="composer-wrap">
     <div class="composer">
       <div class="field">
-        <textarea id="question" rows="1" autocomplete="off"
+        <textarea id="question" rows="1" autocomplete="off" maxlength="2000"
                   placeholder="Ask about a meeting, schedule, or city service…"
                   aria-label="Ask a question"></textarea>
         <button id="submit" class="send" type="button">
@@ -570,6 +609,9 @@ INDEX_HTML = """\
       addUser(q);
       const typing = addTyping();
       try {
+        // Mirror the server's 20-turn (10-exchange) history cap so we never
+        // send a body the API would 422; keep only the most recent turns.
+        history = history.slice(-20);
         const res = await fetch("/ask", {
           method: "POST",
           headers: {"Content-Type": "application/json"},
@@ -580,6 +622,12 @@ INDEX_HTML = """\
         // friendly message in the thread rather than the generic error path.
         if (res.status === 429) {
           addError("You're sending requests too quickly — please wait a moment and try again.");
+          return;
+        }
+        // Input-cap rejection (question/history over the server's limits):
+        // friendly nudge rather than the generic server-error path.
+        if (res.status === 422) {
+          addError("That message was too long — please shorten it and try again.");
           return;
         }
         if (!res.ok) throw new Error("Server error (" + res.status + "). Please try again.");
