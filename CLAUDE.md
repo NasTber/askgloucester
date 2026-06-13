@@ -14,6 +14,7 @@ AskGloucester is a civic AI assistant for Gloucester, MA. It answers questions a
 - **Scope changes tightly.** Keep presentation-only changes separate from logic/behavior changes so a regression's blame is unambiguous.
 - **Overengineering check.** Fix a real *current* wrong, not hypotheticals. Prefer removing an over-eager rule/filter over stacking new ones. Don't hand-code per-case branches. When unsure, say so.
 - zsh: never put inline `#` comments in terminal commands. Always `source .venv/bin/activate` before running anything (conda `(base)` lacks deps like `dotenv`).
+- Add clear comments explaining Azure SDK calls.
 
 ## Architecture
 
@@ -47,7 +48,7 @@ AskGloucester is a civic AI assistant for Gloucester, MA. It answers questions a
 
 Index fields: `id, content, source_url, document_date, meeting_body, document_type, page_number, chunk_id, meeting_category, content_vector`. `title` is NOT indexed (blob metadata only). `document_date` is String ISO `YYYY-MM-DD` (sortable + filterable, not facetable).
 
-Data sources (AMIDs): 35 City Council agendas ✅, 36 City Council minutes ✅, 113 School Committee agendas ✅, 114 School Committee minutes ❌ DEAD (1 doc, 2019 — do not use). SC minutes come from the public Drive folder. `meeting_category` (`full_committee` / `subcommittee` / `negotiations`) is derived from the title at ingest (`classify_meeting_category`; "negotiat" outranks "subcommittee").
+Data sources (AMIDs): 35 City Council agendas ✅, 36 City Council minutes ✅, 113 School Committee agendas ✅, 114 School Committee minutes ❌ DEAD (1 doc, 2019). NB: 114 is still in the scraper's `DEFAULT_AMID_LIST = (113, 114, 35, 36)` — it is requested every run but yields nothing in-window, so real SC minutes come from the public Drive folder instead. `meeting_category` (`full_committee` / `subcommittee` / `negotiations`) is derived from the title at ingest (`classify_meeting_category`; "negotiat" outranks "subcommittee", else `full_committee`).
 
 ## Identity (don't mix these up)
 
@@ -87,7 +88,7 @@ python run_pipeline.py --start-date 2026-01-01 --end-date 2026-12-31 --meeting-b
 
 ## Security posture
 
-- **Headers middleware** (`_security_headers`, on all responses incl. 429/413/422): CSP with a **per-request script nonce** (`script-src 'self' 'nonce-…'`, no `unsafe-inline` for scripts), `style-src 'self' 'unsafe-inline' https://fonts.googleapis.com`, `font-src 'self' https://fonts.gstatic.com`, `connect-src 'self'`, `frame-ancestors 'none'`, `object-src 'none'`, `base-uri 'self'`, `form-action 'self'`; plus `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: strict-origin-when-cross-origin`, HSTS (`max-age=31536000; includeSubDomains`, no preload), minimal `Permissions-Policy`. The nonce is injected into the single `<script>` via a targeted `INDEX_HTML.replace("<script>", …, 1)` — **never `.format`** (INDEX_HTML is full of literal `{ }`).
+- **Headers middleware** (`_security_headers`, on all responses incl. 429/413/422): CSP, in code order — `default-src 'self'`, `script-src 'self' 'nonce-…'` (**per-request script nonce**, no `unsafe-inline` for scripts), `style-src 'self' 'unsafe-inline' https://fonts.googleapis.com`, `font-src 'self' https://fonts.gstatic.com`, `img-src 'self' data:`, `connect-src 'self'`, `base-uri 'self'`, `form-action 'self'`, `frame-ancestors 'none'`, `object-src 'none'`; plus `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: strict-origin-when-cross-origin`, HSTS (`max-age=31536000; includeSubDomains`, no preload), `Permissions-Policy: geolocation=(), camera=(), microphone=()`. The nonce is injected into the single `<script>` via a targeted `INDEX_HTML.replace("<script>", …, 1)` — **never `.format`** (INDEX_HTML is full of literal `{ }`).
 - **Input caps** (Pydantic — rejected with 422 *before* the rate bucket and *before* any LLM/embedding call): `question` max 2000, `Message.content` max 12000, `history` max 20 items. **Body-size 413 guard** at 512 KB (Content-Length check in the middleware, before the body is read). Client trims `history.slice(-20)` and the textarea has `maxlength="2000"`.
 - **Rate limit** (slowapi): 10/min per-IP + 30/min global, `memory://` storage (valid only because max-replicas = 1), 429 with `Retry-After: 60`. Wired via `app.state.limiter` + per-route decorators + a `RateLimitExceeded` handler (no `SlowAPIMiddleware`).
 
@@ -122,25 +123,36 @@ python run_pipeline.py --start-date 2026-01-01 --end-date 2026-12-31 --meeting-b
 askgloucester/
 ├── infra/
 │   ├── main.bicep
-│   └── modules/  (identity, storage, search [basic], documentIntelligence, openai, keyvault, containerapp)
+│   ├── main.bicepparam
+│   └── modules/  # kebab-case files: identity, storage, search (basic), document-intelligence,
+│                 # openai, keyvault, containerapp.  (Also container-apps.bicep +
+│                 # container-registry.bicep — appear superseded by containerapp.bicep; verify
+│                 # which main.bicep references before the next infra change.)
 ├── ingestion/
 │   ├── utils.py            # classify_meeting_category
-│   ├── scraper.py          # Archive.aspx (AMIDs 35/36/113); existence-only skip
+│   ├── scraper.py          # Archive.aspx; DEFAULT_AMID_LIST = (113, 114, 35, 36); existence-only skip
 │   ├── processor.py
-│   ├── chunker.py          # metadata prefix on every chunk
+│   ├── chunker.py          # 500-token/50-overlap chunks; metadata prefix on every chunk
 │   ├── embedder.py         # token-bucket pacing
-│   ├── indexer.py          # ensure_index = create-if-not-exists
+│   ├── indexer.py          # ensure_index = create-if-not-exists; index field schema lives here
 │   ├── drive_source.py     # SC minutes via gdown; existence-only skip
-│   └── calendar_source.py  # per-CID iCal → events Table
+│   ├── calendar_source.py  # per-CID iCal → events Table; CANCEL/RESCHEDUL status derivation
+│   └── requirements.txt
 ├── api/
+│   ├── __init__.py
 │   ├── agent.py            # create_agent; doc_search + schedule_lookup; TOOL_GUIDANCE; recency + grounding rules
 │   ├── calendar.py         # api-local read-only events Table reader
 │   ├── query.py            # SYSTEM_PROMPT + thin delegator to agent.ask
-│   └── main.py             # FastAPI; chat UI; security headers + nonce CSP; rate limit; input caps
-├── scripts/                # data-inspection / trace helpers (read-only)
+│   ├── main.py             # FastAPI; chat UI; security headers + nonce CSP; rate limit; input caps
+│   ├── routes/.gitkeep     # empty placeholder dir
+│   ├── Dockerfile          # legacy/local; CI builds the ROOT Dockerfile, not this one
+│   └── requirements.txt
+├── scripts/                # data-inspection / trace helpers (read-only, untracked WIP)
 ├── .github/workflows/      # deploy-app.yml, ingest.yml
-├── Dockerfile              # python:3.12-slim, api/ only, linux/amd64
+├── Dockerfile              # python:3.12-slim, api/ only, linux/amd64 — the one CI uses
 ├── run_pipeline.py
+├── README.md
 ├── CLAUDE.md
-└── .env                    # local config (no secrets — all DefaultAzureCredential)
+├── .env                    # local config (gitignored; no secrets — all DefaultAzureCredential)
+└── .env.example            # committed template
 ```
