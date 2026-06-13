@@ -17,6 +17,9 @@ param githubActionsSpObjectId string
 @description('Name of the blob container to create.')
 param containerName string = 'raw-documents'
 
+@description('Name of the OCR-cache blob container (Document Intelligence output).')
+param extractedTextContainerName string = 'extracted-text'
+
 // Built-in role: Storage Blob Data Contributor
 var blobDataContributorRoleId = 'ba92f5b4-2d11-453d-a403-e96b0029c9fe'
 // Built-in role: Storage Table Data Reader (read-only access to Table Storage)
@@ -46,6 +49,17 @@ resource blobService 'Microsoft.Storage/storageAccounts/blobServices@2023-05-01'
 resource rawDocumentsContainer 'Microsoft.Storage/storageAccounts/blobServices/containers@2023-05-01' = {
   parent: blobService
   name: containerName
+  properties: {
+    publicAccess: 'None'
+  }
+}
+
+// Durable OCR cache: Document Intelligence (prebuilt-read) output keyed by
+// source blob_name, so re-OCR is a one-time cost per document even across an AI
+// Search index recreate (see ingestion/processor.py EXTRACTED_TEXT_CONTAINER).
+resource extractedTextContainer 'Microsoft.Storage/storageAccounts/blobServices/containers@2023-05-01' = {
+  parent: blobService
+  name: extractedTextContainerName
   properties: {
     publicAccess: 'None'
   }
