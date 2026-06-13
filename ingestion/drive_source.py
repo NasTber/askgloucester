@@ -133,12 +133,19 @@ def _enumerate_pdfs() -> list[tuple[str, str]]:
     return pdfs
 
 
-def fetch_and_upload(start_date: str, end_date: str) -> list[UploadedDocument]:
+def fetch_and_upload(
+    start_date: str,
+    end_date: str,
+    skip_source_urls: set[str] | None = None,
+) -> list[UploadedDocument]:
     """Download in-window minutes PDFs from Drive and upload them to blob.
 
     Args:
         start_date: Inclusive start date, ``YYYY-MM-DD``.
         end_date: Inclusive end date, ``YYYY-MM-DD``.
+        skip_source_urls: Source URLs already present in the search index. Any
+            in-window file whose ``source_url`` is in this set is skipped before
+            download — it is already indexed. ``None``/empty disables skipping.
 
     Returns:
         A list of :class:`scraper.UploadedDocument` — identical in shape to
@@ -187,6 +194,14 @@ def fetch_and_upload(start_date: str, end_date: str) -> list[UploadedDocument]:
         for file_id, name, meeting_date, prefix in in_window:
             document_date = meeting_date.strftime("%Y-%m-%d")
             source_url = f"https://drive.google.com/file/d/{file_id}/view"
+
+            # Existence-only skip: the Drive file id (and thus source_url) comes
+            # from enumeration, so an already-indexed file is skipped before any
+            # download or upload.
+            if skip_source_urls and source_url in skip_source_urls:
+                logger.info("skipping already-indexed: %s", source_url)
+                continue
+
             # The filename names the specific meeting, so it (not the constant
             # MEETING_BODY) is what distinguishes a full committee meeting from a
             # subcommittee or negotiations session.

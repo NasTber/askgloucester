@@ -55,7 +55,12 @@ def _run_calendar_step() -> None:
         logger.exception("Calendar ingestion failed (continuing with documents): %s", exc)
 
 
-def run(start_date: str, end_date: str, meeting_body: str | None) -> int:
+def run(
+    start_date: str,
+    end_date: str,
+    meeting_body: str | None,
+    skip_indexed: bool = True,
+) -> int:
     """Run the full ingestion pipeline. Returns the number of chunks indexed."""
     # 0. Independent structured source. Only on a full ('all') sweep, and run
     # first so it executes regardless of the document flow's outcome (the
@@ -64,11 +69,26 @@ def run(start_date: str, end_date: str, meeting_body: str | None) -> int:
     if meeting_body is None:
         _run_calendar_step()
 
+    # Existence-only skip: pull the set of source_urls already in the index once,
+    # up front, and hand it to both document sources so an already-indexed doc is
+    # skipped before download/Document Intelligence/chunk/embed. New & revised
+    # docs always arrive under a new source_url, so they aren't in the set and
+    # process normally. An empty/missing index yields an empty set (full ingest).
+    # --no-skip (skip_indexed=False) forces a full re-ingest. The calendar source
+    # is untouched — it already does idempotent Table upsert + reconciliation.
+    skip_source_urls: set[str] = set()
+    if skip_indexed:
+        skip_source_urls = indexer.get_indexed_source_urls()
+        logger.info("Existence-only skip ON: %d indexed source_url(s)", len(skip_source_urls))
+    else:
+        logger.info("Existence-only skip OFF (--no-skip): re-ingesting all in-window docs")
+
     # 1a. Scrape + upload Archive.aspx PDFs (agendas).
     documents = scraper.scrape_and_upload(
         start_date=start_date,
         end_date=end_date,
         meeting_body=meeting_body,
+        skip_source_urls=skip_source_urls,
     )
 
     # 1b. Pull School Committee minutes from the public Google Drive folder.
@@ -76,7 +96,9 @@ def run(start_date: str, end_date: str, meeting_body: str | None) -> int:
     # window isn't filtered to a different body. Its UploadedDocument records are
     # identical in shape, so they join the same list and flow through unchanged.
     if meeting_body is None or meeting_body.lower() == "school committee":
-        documents += drive_source.fetch_and_upload(start_date, end_date)
+        documents += drive_source.fetch_and_upload(
+            start_date, end_date, skip_source_urls=skip_source_urls
+        )
 
     if not documents:
         logger.warning("No documents scraped for the given window; nothing to do.")
@@ -134,6 +156,13 @@ def main() -> None:
         help="Committee to ingest. Pass 'all' to ingest every body. "
         "Defaults to School Committee to keep the test set small.",
     )
+    parser.add_argument(
+        "--no-skip",
+        action="store_true",
+        help="Disable the existence-only skip and re-ingest every in-window "
+        "document, even if already indexed (deliberate full re-ingest). "
+        "Skipping is ON by default.",
+    )
     parser.add_argument("-v", "--verbose", action="store_true", help="Enable debug logging.")
     args = parser.parse_args()
 
@@ -143,7 +172,7 @@ def main() -> None:
     )
 
     meeting_body = None if args.meeting_body.lower() == "all" else args.meeting_body
-    run(args.start_date, args.end_date, meeting_body)
+    run(args.start_date, args.end_date, meeting_body, skip_indexed=not args.no_skip)
 
 
 if __name__ == "__main__":

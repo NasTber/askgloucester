@@ -214,6 +214,7 @@ def scrape_and_upload(
     end_date: str,
     amid_list: Iterable[int] = DEFAULT_AMID_LIST,
     meeting_body: str | None = None,
+    skip_source_urls: set[str] | None = None,
 ) -> list[UploadedDocument]:
     """Scrape Archive.aspx collections and upload matching PDFs to blob storage.
 
@@ -226,6 +227,10 @@ def scrape_and_upload(
         meeting_body: Optional committee filter (case-insensitive). When given,
             only AMIDs whose committee matches are scraped — handy for narrowing
             a broader ``amid_list`` down to a single body.
+        skip_source_urls: Source URLs already present in the search index. Any
+            in-window document whose ``source_url`` is in this set is skipped
+            entirely — no download, no upload — since it is already indexed.
+            ``None``/empty disables skipping (a deliberate full re-ingest).
 
     Returns:
         A list of :class:`UploadedDocument` records, one per uploaded blob.
@@ -287,6 +292,13 @@ def scrape_and_upload(
             meeting_category = classify_meeting_category(entry.title)
             # The PDF is downloaded directly from the ViewFile endpoint by ADID.
             source_url = f"{ARCHIVE_BASE_URL}/ArchiveCenter/ViewFile/Item/{entry.adid}"
+
+            # Existence-only skip: if this document is already indexed, skip it
+            # before any download or upload. The ADID (and thus source_url) is
+            # known from the listing, so we never touch the network for it.
+            if skip_source_urls and source_url in skip_source_urls:
+                logger.info("skipping already-indexed: %s", source_url)
+                continue
 
             blob_name = (
                 f"{_sanitize(body)}/{document_date}/{entry.adid}_{document_type}.pdf"

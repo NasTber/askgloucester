@@ -182,6 +182,51 @@ def ensure_index(index_name: str = SEARCH_INDEX_NAME) -> None:
         client.create_or_update_index(index)
 
 
+def get_indexed_source_urls(index_name: str = SEARCH_INDEX_NAME) -> set[str]:
+    """Return the set of ``source_url`` values that already have chunks indexed.
+
+    Pages the index selecting only the ``source_url`` field and dedups to
+    document-level URLs. This is the lookup the ingest path uses to skip
+    already-indexed documents *before* downloading them: a document whose
+    source_url is in this set is fully present (new/revised documents always
+    arrive under a new source_url, so they won't be here).
+
+    One small field over ~3,700 chunks today — single-field paging is cheap.
+
+    Returns an empty set if the index does not exist yet, so a fresh/recreated
+    (empty) index self-corrects to a full ingest — nothing is skipped.
+    """
+    try:
+        client = SearchClient(_search_endpoint(), index_name, credential=_credential())
+        urls: set[str] = set()
+        # Page with skip until the result set is drained (search caps a single
+        # page at `top`); we only ever pull the one source_url field.
+        page = 1000
+        skip = 0
+        while True:
+            results = client.search(
+                search_text="*",
+                select=["source_url"],
+                top=page,
+                skip=skip,
+            )
+            rows = list(results)
+            if not rows:
+                break
+            for doc in rows:
+                url = doc.get("source_url")
+                if url:
+                    urls.add(url)
+            skip += len(rows)
+            if len(rows) < page:
+                break
+        logger.info("Index '%s': %d distinct source_url(s) already indexed", index_name, len(urls))
+        return urls
+    except ResourceNotFoundError:
+        logger.info("Index '%s' does not exist yet — nothing to skip", index_name)
+        return set()
+
+
 def upload_chunks(
     chunks,
     index_name: str = SEARCH_INDEX_NAME,

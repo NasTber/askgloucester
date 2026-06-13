@@ -22,6 +22,8 @@ from __future__ import annotations
 
 import logging
 import os
+import threading
+import time
 
 import tiktoken
 from azure.identity import DefaultAzureCredential, get_bearer_token_provider
@@ -52,6 +54,74 @@ _ENCODING = tiktoken.get_encoding("cl100k_base")
 # Scope used to request AAD tokens for Azure OpenAI ("Cognitive Services").
 _TOKEN_SCOPE = "https://cognitiveservices.azure.com/.default"
 
+# Tokens-per-minute pacing.
+#
+# The embedding deployment's quota is 350K TPM. Without pacing the pipeline fires
+# batches back-to-back, briefly exceeds the minute budget, and the service
+# answers 429 with a ~54s Retry-After — the SDK then sleeps the whole minute,
+# producing a sawtooth. We instead pace ourselves to ~90% of the limit so the
+# cumulative tokens/min stay safely under quota and the 429 path rarely fires.
+#
+# The MAX_REQUEST_TOKENS per-batch cap (280K) is unchanged: it bounds a single
+# request's size; the bucket below governs the *spacing between* requests. The
+# budget (315K) exceeds that cap, so any single batch can always be admitted.
+EMBEDDING_TPM_LIMIT = 350_000
+EMBEDDING_TPM_BUDGET = int(EMBEDDING_TPM_LIMIT * 0.9)  # ~315K tokens/min
+
+
+class _TokenBucket:
+    """A continuously-refilling token bucket for tokens-per-minute pacing.
+
+    Capacity and refill are both ``rate_per_min``: the bucket holds at most one
+    minute's budget and refills at ``rate_per_min / 60`` tokens per second. That
+    permits an initial burst up to a full minute's budget, after which steady-
+    state throughput converges to ``rate_per_min`` tokens/min — keeping any
+    rolling minute under quota. ``acquire`` blocks until the request fits.
+
+    Thread-safe via a lock; the pipeline is single-threaded today but the lock
+    keeps the bucket correct (and cheap) regardless.
+    """
+
+    def __init__(self, rate_per_min: int) -> None:
+        self._rate_per_sec = rate_per_min / 60.0
+        self._capacity = float(rate_per_min)
+        self._tokens = float(rate_per_min)  # start full: first batch isn't delayed
+        self._timestamp = time.monotonic()
+        self._lock = threading.Lock()
+
+    def acquire(self, amount: int) -> float:
+        """Block until ``amount`` tokens are available, then deduct them.
+
+        Returns the seconds spent waiting (0.0 when the budget was immediately
+        available) so the caller can log pacing if it wants. ``amount`` larger
+        than capacity is clamped so it can still be admitted after a full refill
+        rather than blocking forever.
+        """
+        amount = min(amount, int(self._capacity))
+        waited = 0.0
+        while True:
+            with self._lock:
+                now = time.monotonic()
+                # Refill for the elapsed interval, capped at capacity.
+                self._tokens = min(
+                    self._capacity,
+                    self._tokens + (now - self._timestamp) * self._rate_per_sec,
+                )
+                self._timestamp = now
+                if self._tokens >= amount:
+                    self._tokens -= amount
+                    return waited
+                # Sleep just long enough for the deficit to refill, then re-check.
+                deficit = amount - self._tokens
+                wait = deficit / self._rate_per_sec
+            waited += wait
+            time.sleep(wait)
+
+
+# Module-level bucket: shared across embed_chunks calls in a process so pacing
+# carries over (e.g. if the pipeline embeds in several passes).
+_rate_limiter = _TokenBucket(EMBEDDING_TPM_BUDGET)
+
 
 def _client() -> AzureOpenAI:
     """Build an AzureOpenAI client authenticated with DefaultAzureCredential.
@@ -71,24 +141,26 @@ def _client() -> AzureOpenAI:
 
 
 def _batched(chunks, max_items: int, max_tokens: int):
-    """Yield lists of chunks, each within ``max_items`` AND ``max_tokens``.
+    """Yield ``(batch, batch_tokens)``, each within ``max_items`` AND ``max_tokens``.
 
     Greedily packs chunks in their original order; flushes before a chunk would
     push the batch past either cap. A single chunk always forms at least a
     one-item batch (our chunks are ~500 tokens, far under the per-input limit),
-    so this never loops forever on an oversized input.
+    so this never loops forever on an oversized input. The summed tiktoken count
+    is yielded alongside the batch so the caller can pace on it without
+    re-tokenizing.
     """
     batch: list = []
     batch_tokens = 0
     for chunk in chunks:
         tokens = len(_ENCODING.encode(chunk.content))
         if batch and (len(batch) >= max_items or batch_tokens + tokens > max_tokens):
-            yield batch
+            yield batch, batch_tokens
             batch, batch_tokens = [], 0
         batch.append(chunk)
         batch_tokens += tokens
     if batch:
-        yield batch
+        yield batch, batch_tokens
 
 
 def embed_chunks(chunks, batch_size: int = DEFAULT_BATCH_SIZE):
@@ -118,7 +190,15 @@ def embed_chunks(chunks, batch_size: int = DEFAULT_BATCH_SIZE):
     deployment = os.environ["AZURE_OPENAI_EMBEDDING_DEPLOYMENT"]
 
     done = 0
-    for batch in _batched(chunks, max_items=batch_size, max_tokens=MAX_REQUEST_TOKENS):
+    for batch, batch_tokens in _batched(chunks, max_items=batch_size, max_tokens=MAX_REQUEST_TOKENS):
+        # Pace to stay under the embedding TPM quota: block until this batch's
+        # token cost fits the bucket. This keeps cumulative tokens/min under
+        # budget so the 429 -> ~54s Retry-After sleep rarely fires. The SDK's
+        # built-in 429 retry/backoff remains as a fallback for any overshoot.
+        waited = _rate_limiter.acquire(batch_tokens)
+        if waited:
+            logger.debug("Paced batch of %d tokens: waited %.2fs", batch_tokens, waited)
+
         # The embeddings API takes a list of strings and returns one vector per
         # input; we map each result back by its `index` to preserve alignment.
         response = client.embeddings.create(
