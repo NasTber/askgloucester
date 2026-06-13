@@ -17,6 +17,7 @@ Run locally:
 
 from __future__ import annotations
 
+import secrets
 from typing import Literal
 
 from fastapi import FastAPI, Request
@@ -34,6 +35,43 @@ app = FastAPI(
     description="Civic AI assistant answering questions about Gloucester, MA municipal documents.",
     version="0.1.0",
 )
+
+
+# --- Security headers + per-request CSP nonce -----------------------------
+# One HTTP middleware, so the headers land on *every* response — including the
+# 429 that the RateLimitExceeded handler builds itself (the handler's own
+# JSONResponse is the `response` here, since middleware wraps the whole call
+# stack). The inline <script> in INDEX_HTML carries a matching nonce, so the
+# CSP can forbid all other inline script without breaking the page.
+@app.middleware("http")
+async def _security_headers(request: Request, call_next):
+    # Fresh, unguessable nonce per request; stash it before the handler runs so
+    # GET / can read it back and stamp the same value onto its <script> tag.
+    nonce = secrets.token_urlsafe(16)
+    request.state.csp_nonce = nonce
+    response = await call_next(request)
+    response.headers["Content-Security-Policy"] = (
+        "default-src 'self'; "
+        f"script-src 'self' 'nonce-{nonce}'; "
+        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+        "font-src 'self' https://fonts.gstatic.com; "
+        "img-src 'self' data:; "
+        "connect-src 'self'; "
+        "base-uri 'self'; "
+        "form-action 'self'; "
+        "frame-ancestors 'none'; "
+        "object-src 'none'"
+    )
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["Strict-Transport-Security"] = (
+        "max-age=31536000; includeSubDomains"
+    )
+    response.headers["Permissions-Policy"] = (
+        "geolocation=(), camera=(), microphone=()"
+    )
+    return response
 
 
 # --- Rate limiting for POST /ask ------------------------------------------
@@ -144,9 +182,17 @@ def _to_source(chunk: dict, n: int) -> Source:
 
 
 @app.get("/", response_class=HTMLResponse)
-def index() -> str:
-    """Serve the single-page resident UI (inline HTML/CSS/JS, no static dir)."""
-    return INDEX_HTML
+def index(request: Request) -> HTMLResponse:
+    """Serve the single-page resident UI (inline HTML/CSS/JS, no static dir).
+
+    Stamp this request's CSP nonce (set by the security-headers middleware)
+    onto the single inline <script> tag so it satisfies script-src. INDEX_HTML
+    is full of literal { } from the inline CSS/JS, so we inject via a targeted
+    one-shot .replace rather than str.format.
+    """
+    nonce = request.state.csp_nonce
+    html = INDEX_HTML.replace("<script>", f'<script nonce="{nonce}">', 1)
+    return HTMLResponse(html)
 
 
 @app.get("/health")
