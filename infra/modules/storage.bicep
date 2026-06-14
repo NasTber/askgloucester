@@ -23,6 +23,9 @@ param extractedTextContainerName string = 'extracted-text'
 @description('Name of the staff-directory officials table.')
 param officialsTableName string = 'officials'
 
+@description('Name of the board/commission appointments table.')
+param boardsTableName string = 'boards'
+
 // Built-in role: Storage Blob Data Contributor
 var blobDataContributorRoleId = 'ba92f5b4-2d11-453d-a403-e96b0029c9fe'
 // Built-in role: Storage Table Data Reader (read-only access to Table Storage)
@@ -83,6 +86,21 @@ resource tableService 'Microsoft.Storage/storageAccounts/tableServices@2023-05-0
 resource officialsTable 'Microsoft.Storage/storageAccounts/tableServices/tables@2023-05-01' = {
   parent: tableService
   name: officialsTableName
+  properties: {}
+}
+
+// Structured board/commission appointments table written by
+// ingestion/boards_source.py (one BOARD row per board + one PERSON row per
+// appointment) and read by api/boards.py for the board_lookup tool. Mirrors the
+// `officials` declaration; runtime create_table_if_not_exists still keeps the
+// pipeline runnable on a fresh account. The account-scoped Storage Table Data
+// Reader assignment below already covers it — no extra RBAC.
+// DECLARED-NOT-APPLIED: pending the IaC reconciliation session — a main.bicep
+// apply still clobbers the www hostname binding until that is in Bicep, so this
+// declaration ships but is not deployed yet.
+resource boardsTable 'Microsoft.Storage/storageAccounts/tableServices/tables@2023-05-01' = {
+  parent: tableService
+  name: boardsTableName
   properties: {}
 }
 

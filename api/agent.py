@@ -29,7 +29,7 @@ from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.tools import tool
 from langchain_openai import AzureChatOpenAI
 
-from . import calendar, city_services, directory
+from . import boards, calendar, city_services, directory
 from .query import (
     AZURE_OPENAI_API_VERSION,
     AZURE_OPENAI_CHAT_DEPLOYMENT,
@@ -232,6 +232,36 @@ def directory_lookup(query: str) -> str:
 
 
 @tool
+def board_lookup(query: str) -> str:
+    """Look up APPOINTED Gloucester board / commission / committee members and their terms.
+
+    Use for who SITS ON or CHAIRS an appointed board, when a member's TERM
+    EXPIRES, or who holds a DESIGNATED SEAT (e.g. "who's on the Zoning Board of
+    Appeals", "when does the Conservation Commission chair's term end", "who
+    represents the Planning Board on the Community Preservation Committee"). Covers
+    the PUBLISHED board & commission appointments (name, position, designated
+    seat, term-expiration date, board appointments page).
+
+    DISAMBIGUATION — do NOT confuse with directory_lookup: directory_lookup is
+    PAID city STAFF and departments (the IT director, the Public Works office);
+    board_lookup is APPOINTED, mostly-volunteer BOARD MEMBERS and their terms.
+    Also NOT what a body discussed/decided in a meeting (doc_search) and NOT
+    meeting dates/times (schedule_lookup).
+
+    Answers are PLAIN PROSE with each board's appointments page inline — there is
+    NO [n] citation channel for boards. If board_lookup returns nothing, you MAY
+    fall back to doc_search for context before declining.
+
+    Args:
+        query: A board name (for a whole-board roster) or a person/role/seat to
+            search for (e.g. "Zoning Board of Appeals", "Harry Hoglander",
+            "Planning Board representative").
+    """
+    result = boards.search_boards(query)
+    return boards.render_boards(query, result)
+
+
+@tool
 def city_services_search(query: str) -> str:
     """Look up Gloucester city-SERVICE info: trash, recycling, yard waste, compost, special/bulk/hazardous collections.
 
@@ -278,7 +308,7 @@ def city_services_search(query: str) -> str:
 # the published staff directory. Append future tools here — create_agent routes
 # to them automatically once registered. This is the single place new
 # capabilities plug in.
-TOOLS = [doc_search, schedule_lookup, directory_lookup, city_services_search]
+TOOLS = [doc_search, schedule_lookup, directory_lookup, city_services_search, board_lookup]
 
 
 # Tool-use guidance appended to the ported grounding rules. Routes between the two
@@ -336,27 +366,56 @@ TOOL_GUIDANCE = (
     "   link). If directory_lookup returns nothing, you MAY fall back to doc_search\n"
     "   for context before declining.\n"
     "\n"
-    "4) city_services_search — published CITY-SERVICE information pages. Route\n"
-    "   trash / recycling / yard waste / leaf collection / compost / special\n"
-    "   collections (Christmas trees, household hazardous waste) / bulk-item &\n"
-    "   sticker / holiday-collection-shift questions here. These are PUBLISHED\n"
-    "   service info pages — NOT meetings, schedules, or the staff directory: not\n"
-    "   what was said or decided at a meeting (doc_search), not meeting dates/times\n"
-    "   (schedule_lookup), not who holds a role (directory_lookup). It returns\n"
-    "   numbered [n] sources — cite them by number exactly like doc_search. If\n"
-    "   city_services_search returns nothing, you MAY fall back to doc_search for\n"
-    "   context before declining.\n"
-    "   LIVE-STATUS CAVEAT: for CURRENT operational status — a one-off suspension\n"
-    "   or delay, or 'is recycling running this week' — the ingested page text may\n"
-    "   LAG reality. Do NOT assert current operational status as ground truth:\n"
-    "   give what the page says (with its date if present) and point the resident\n"
-    "   to the city website / AlertCenter for live status.\n"
+    "4) city_services_search — published CITY-SERVICE information pages, covering\n"
+    "   TWO categories today:\n"
+    "   - Trash & recycling: trash / recycling / yard waste / leaf collection /\n"
+    "     compost / special collections (Christmas trees, household hazardous\n"
+    "     waste) / bulk-item & sticker / holiday-collection-shift questions.\n"
+    "   - Permits & inspections: building / electrical / plumbing / gas / sign /\n"
+    "     demolition permits, inspection requests, the building inspector's role,\n"
+    "     building-inspector fees, how/where to file, and 'do I need a permit'\n"
+    "     questions.\n"
+    "   These are PUBLISHED service info pages — NOT meetings, schedules, or the\n"
+    "   staff directory: not what was said or decided at a meeting (doc_search),\n"
+    "   not meeting dates/times (schedule_lookup), not who holds a role\n"
+    "   (directory_lookup). It returns numbered [n] sources — cite them by number\n"
+    "   exactly like doc_search. If city_services_search returns nothing, you MAY\n"
+    "   fall back to doc_search for context before declining.\n"
+    "   LIVE-STATUS CAVEAT: the ingested page text can LAG reality — do NOT assert\n"
+    "   current operational status as ground truth. Give what the page says (with\n"
+    "   its date if present) and point the resident to the live source:\n"
+    "   - Trash/recycling: for a one-off suspension or delay ('is recycling running\n"
+    "     this week'), point to the city website / AlertCenter.\n"
+    "   - Permits: these pages describe HOW to file (the city's online-permitting\n"
+    "     portal) and fee/process info — they do NOT carry the live status of any\n"
+    "     specific permit or application. For filing, or to check an application,\n"
+    "     point the resident to the city's Online Permitting page / portal (linked\n"
+    "     from the cited page), and to AlertCenter for service alerts. Do not state\n"
+    "     a permit's current status as fact.\n"
+    "\n"
+    "5) board_lookup — APPOINTED board / commission / committee MEMBERS and their\n"
+    "   TERMS. Route: who SITS ON or CHAIRS a board, when a member's TERM EXPIRES,\n"
+    "   who holds a DESIGNATED SEAT ('who represents the Planning Board on the\n"
+    "   Community Preservation Committee'), and whole-board rosters ('who's on the\n"
+    "   ZBA'). This is the PUBLISHED board & commission appointments list.\n"
+    "   CRITICAL — board_lookup vs directory_lookup: directory_lookup = PAID city\n"
+    "   STAFF and departments (the IT director, the Public Works office);\n"
+    "   board_lookup = APPOINTED, mostly-VOLUNTEER board members + their term dates.\n"
+    "   A 'who's on board X' / 'when does their term end' question is board_lookup;\n"
+    "   a 'who runs department Y / how do I reach staff' question is\n"
+    "   directory_lookup. board_lookup is also NOT what a body discussed or decided\n"
+    "   (doc_search) and NOT meeting dates/times (schedule_lookup). Answers are\n"
+    "   PLAIN PROSE with each board's appointments page inline (NO [n] markers). For\n"
+    "   an ELECTED body (School Committee, City Council) board_lookup will say so —\n"
+    "   defer those to doc_search. If board_lookup returns nothing, you MAY fall\n"
+    "   back to doc_search for context before declining.\n"
     "\n"
     "CITATIONS. Bracketed numbers like [1] or [2][3] tag doc_search AND\n"
     "city_services_search sources — cite those by number. NEVER put a tool name in\n"
     "brackets — no [schedule_lookup], no [directory_lookup], no [city_services_search],\n"
-    "no [doc_search], no [toolname] of any kind. Schedule and directory answers carry\n"
-    "NO [n] markers; they use plain prose plus the links above.\n"
+    "no [board_lookup], no [doc_search], no [toolname] of any kind. Schedule,\n"
+    "directory, and board answers carry NO [n] markers; they use plain prose plus\n"
+    "the links above.\n"
     "\n"
     "SCOPE CROSS-CASE (important): the two rosters differ.\n"
     " - Conservation Commission: a CONTENT question ('what did they decide') must\n"

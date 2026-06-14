@@ -28,6 +28,7 @@ from dotenv import load_dotenv
 # Make the ingestion modules importable when run from the project root.
 sys.path.insert(0, "ingestion")
 
+import boards_source  # noqa: E402
 import calendar_source  # noqa: E402
 import chunker  # noqa: E402
 import city_services_source  # noqa: E402
@@ -88,6 +89,21 @@ def _run_city_services_step() -> None:
         logger.exception("City-services ingestion failed (continuing with documents): %s", exc)
 
 
+def _run_boards_step() -> None:
+    """Independent structured source: upsert board/commission appointments.
+
+    A sibling of the calendar/directory/city-services steps. Wrapped in its own
+    try/except so a boards failure can NEVER break the document pipeline. Writes
+    ONLY to the ``boards`` Azure Table — it does not touch blob storage, Document
+    Intelligence, chunking, embedding, or the AI Search index.
+    """
+    try:
+        result = boards_source.fetch_and_upsert_boards()
+        logger.info("Boards step complete: %s", result)
+    except Exception as exc:  # noqa: BLE001 - never let boards break documents
+        logger.exception("Boards ingestion failed (continuing with documents): %s", exc)
+
+
 def run(
     start_date: str,
     end_date: str,
@@ -104,6 +120,7 @@ def run(
         _run_calendar_step()
         _run_directory_step()
         _run_city_services_step()
+        _run_boards_step()
 
     # Existence-only skip: pull the set of source_urls already in the index once,
     # up front, and hand it to both document sources so an already-indexed doc is

@@ -114,6 +114,30 @@ TARGETS: list[CityServiceTarget] = [
     ),
     # NB: /308/Trash-Recycling is intentionally OMITTED — it is a dead URL that
     # serves a full themed HTTP 404 page (see fetch_html_page's status gate).
+    #
+    # --- Building / permits (same fr-view content-page shape as the trash pages) ---
+    CityServiceTarget(
+        url="https://www.gloucester-ma.gov/230/Inspectional-Services",
+        kind="html",
+        service_category="permits",
+        label="Inspectional Services",
+    ),
+    CityServiceTarget(
+        url="https://www.gloucester-ma.gov/895/Online-Permitting",
+        kind="html",
+        service_category="permits",
+        label="Online Permitting",
+    ),
+    CityServiceTarget(
+        url="https://www.gloucester-ma.gov/231/Building-Inspector",
+        kind="html",
+        service_category="permits",
+        label="Building Inspector",
+    ),
+    # NB: the ViewPoint/OpenGov filing portal (gloucesterma.viewpointcloud.com) is
+    # intentionally OMITTED — it is the dynamic filing app, not prose; its link
+    # comes through inside the /895 Online-Permitting page text. /839 (bulk
+    # permit-data CSV/Excel records) is also omitted — wrong shape for this parser.
 ]
 
 
@@ -379,6 +403,7 @@ def fetch_and_extract(
 # dict so adding "permits" / "water" later is a one-line change, not new logic.
 CATEGORY_DISPLAY: dict[str, str] = {
     "trash": "Trash & Recycling",
+    "permits": "Permits & Inspections",
 }
 
 # The leading marker of every city-services chunk prefix (used as a presence
