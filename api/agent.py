@@ -29,7 +29,7 @@ from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.tools import tool
 from langchain_openai import AzureChatOpenAI
 
-from . import calendar
+from . import calendar, directory
 from .query import (
     AZURE_OPENAI_API_VERSION,
     AZURE_OPENAI_CHAT_DEPLOYMENT,
@@ -213,13 +213,33 @@ def schedule_lookup(
     return calendar.render_events(resolved_body, events, start_utc, end_utc)
 
 
+@tool
+def directory_lookup(query: str) -> str:
+    """Look up CURRENT Gloucester city staff and officials — who holds a role and how to reach them.
+
+    Use for "who is the IT director", "who runs Public Works", "how do I contact
+    the Assessor's office". Covers the PUBLISHED city staff directory (name,
+    title, department, department phone, directory page) — NOT what someone said
+    or did in a meeting (that is ``doc_search``) and NOT meeting dates/times (that
+    is ``schedule_lookup``).
+
+    Args:
+        query: A free-text role, name, or department to search for (e.g. "IT
+            director", "Public Works", "city clerk").
+    """
+    matches = directory.search_officials(query)
+    return directory.render_officials(query, matches)
+
+
 # --- Router seam ------------------------------------------------------------
 # The tools the agent may call. ``doc_search`` answers "what was discussed /
 # decided" from indexed documents (SC + City Council); ``schedule_lookup``
-# answers "when do they meet" from the city calendar (full roster). Append future
-# tools (contacts, ...) here — create_agent routes to them automatically once
-# registered. This is the single place new capabilities plug in.
-TOOLS = [doc_search, schedule_lookup]
+# answers "when do they meet" from the city calendar (full roster);
+# ``directory_lookup`` answers "who holds this role / how do I reach them" from
+# the published staff directory. Append future tools here — create_agent routes
+# to them automatically once registered. This is the single place new
+# capabilities plug in.
+TOOLS = [doc_search, schedule_lookup, directory_lookup]
 
 
 # Tool-use guidance appended to the ported grounding rules. Routes between the two
@@ -266,10 +286,22 @@ TOOL_GUIDANCE = (
     "   inline — each event carries a 'Details:' permalink — so residents can\n"
     "   click through to the official calendar entry.\n"
     "\n"
+    "3) directory_lookup — WHO currently holds a role or works in a department, and\n"
+    "   HOW to reach them (name, title, department, department phone, directory\n"
+    "   page). Use for current staff/official IDENTITY & CONTACT questions: 'who is\n"
+    "   the IT director', 'who runs Public Works', 'how do I contact the Assessor's\n"
+    "   office'. It covers the PUBLISHED city staff directory — NOT what someone\n"
+    "   said or did in a meeting (that is doc_search) and NOT meeting dates/times\n"
+    "   (that is schedule_lookup). Directory answers are PLAIN PROSE with the\n"
+    "   person's directory page inline (plus any department phone / contact-form\n"
+    "   link). If directory_lookup returns nothing, you MAY fall back to doc_search\n"
+    "   for context before declining.\n"
+    "\n"
     "CITATIONS. Bracketed numbers like [1] or [2][3] are ONLY for doc_search\n"
     "document sources. NEVER put a tool name in brackets — no [schedule_lookup],\n"
-    "no [doc_search], no [toolname] of any kind. Schedule answers carry NO [n]\n"
-    "markers; they use plain prose plus the calendar links above.\n"
+    "no [directory_lookup], no [doc_search], no [toolname] of any kind. Schedule\n"
+    "and directory answers carry NO [n] markers; they use plain prose plus the\n"
+    "links above.\n"
     "\n"
     "SCOPE CROSS-CASE (important): the two rosters differ.\n"
     " - Conservation Commission: a CONTENT question ('what did they decide') must\n"

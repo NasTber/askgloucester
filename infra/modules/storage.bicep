@@ -20,6 +20,9 @@ param containerName string = 'raw-documents'
 @description('Name of the OCR-cache blob container (Document Intelligence output).')
 param extractedTextContainerName string = 'extracted-text'
 
+@description('Name of the staff-directory officials table.')
+param officialsTableName string = 'officials'
+
 // Built-in role: Storage Blob Data Contributor
 var blobDataContributorRoleId = 'ba92f5b4-2d11-453d-a403-e96b0029c9fe'
 // Built-in role: Storage Table Data Reader (read-only access to Table Storage)
@@ -63,6 +66,24 @@ resource extractedTextContainer 'Microsoft.Storage/storageAccounts/blobServices/
   properties: {
     publicAccess: 'None'
   }
+}
+
+resource tableService 'Microsoft.Storage/storageAccounts/tableServices@2023-05-01' = {
+  parent: storageAccount
+  name: 'default'
+}
+
+// Structured staff-directory table written by ingestion/directory_source.py
+// (one row per department+person) and read by a future directory tool. The
+// `events` calendar table is created at runtime (create_table_if_not_exists)
+// rather than declared here; we declare `officials` so it is IaC-tracked, but
+// runtime create-if-not-exists still keeps the pipeline runnable on a fresh
+// account. The Storage Table Data Reader assignment below is account-scoped, so
+// it already covers this table — no extra RBAC needed.
+resource officialsTable 'Microsoft.Storage/storageAccounts/tableServices/tables@2023-05-01' = {
+  parent: tableService
+  name: officialsTableName
+  properties: {}
 }
 
 resource blobDataContributorAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {

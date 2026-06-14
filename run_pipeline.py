@@ -30,6 +30,7 @@ sys.path.insert(0, "ingestion")
 
 import calendar_source  # noqa: E402
 import chunker  # noqa: E402
+import directory_source  # noqa: E402
 import drive_source  # noqa: E402
 import embedder  # noqa: E402
 import indexer  # noqa: E402
@@ -55,6 +56,21 @@ def _run_calendar_step() -> None:
         logger.exception("Calendar ingestion failed (continuing with documents): %s", exc)
 
 
+def _run_directory_step() -> None:
+    """Independent structured source: upsert the city staff directory.
+
+    A sibling of the calendar step. Wrapped in its own try/except so a directory
+    failure can NEVER break the document pipeline. Writes ONLY to the
+    ``officials`` Azure Table — it does not touch blob storage, Document
+    Intelligence, chunking, embedding, or the AI Search index.
+    """
+    try:
+        result = directory_source.ingest_officials()
+        logger.info("Directory step complete: %s", result)
+    except Exception as exc:  # noqa: BLE001 - never let directory break documents
+        logger.exception("Directory ingestion failed (continuing with documents): %s", exc)
+
+
 def run(
     start_date: str,
     end_date: str,
@@ -62,12 +78,14 @@ def run(
     skip_indexed: bool = True,
 ) -> int:
     """Run the full ingestion pipeline. Returns the number of chunks indexed."""
-    # 0. Independent structured source. Only on a full ('all') sweep, and run
-    # first so it executes regardless of the document flow's outcome (the
-    # documents path can early-return when its window is empty). Its own
-    # try/except keeps any calendar failure from breaking the document pipeline.
+    # 0. Independent structured sources (calendar + staff directory). Only on a
+    # full ('all') sweep, and run first so they execute regardless of the document
+    # flow's outcome (the documents path can early-return when its window is
+    # empty). Each has its own try/except so a structured-source failure can never
+    # break the document pipeline.
     if meeting_body is None:
         _run_calendar_step()
+        _run_directory_step()
 
     # Existence-only skip: pull the set of source_urls already in the index once,
     # up front, and hand it to both document sources so an already-indexed doc is
