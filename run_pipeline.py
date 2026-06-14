@@ -30,6 +30,7 @@ sys.path.insert(0, "ingestion")
 
 import calendar_source  # noqa: E402
 import chunker  # noqa: E402
+import city_services_source  # noqa: E402
 import directory_source  # noqa: E402
 import drive_source  # noqa: E402
 import embedder  # noqa: E402
@@ -71,6 +72,22 @@ def _run_directory_step() -> None:
         logger.exception("Directory ingestion failed (continuing with documents): %s", exc)
 
 
+def _run_city_services_step() -> None:
+    """Independent source: rebuild the city-services search index (HTML pages).
+
+    A sibling of the calendar/directory steps. Wrapped in its own try/except so a
+    city-services failure can NEVER break the document pipeline. Writes ONLY to the
+    dedicated ``gloucester-city-services`` search index (wipe-and-rebuild) — it
+    does not touch the docs index, blob storage, or Document Intelligence. PDF
+    targets are skipped until the later PDF/OCR step.
+    """
+    try:
+        indexed = city_services_source.fetch_and_index_city_services()
+        logger.info("City-services step complete: %d chunk(s) indexed", indexed)
+    except Exception as exc:  # noqa: BLE001 - never let city-services break documents
+        logger.exception("City-services ingestion failed (continuing with documents): %s", exc)
+
+
 def run(
     start_date: str,
     end_date: str,
@@ -86,6 +103,7 @@ def run(
     if meeting_body is None:
         _run_calendar_step()
         _run_directory_step()
+        _run_city_services_step()
 
     # Existence-only skip: pull the set of source_urls already in the index once,
     # up front, and hand it to both document sources so an already-indexed doc is

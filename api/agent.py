@@ -29,7 +29,7 @@ from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.tools import tool
 from langchain_openai import AzureChatOpenAI
 
-from . import calendar, directory
+from . import calendar, city_services, directory
 from .query import (
     AZURE_OPENAI_API_VERSION,
     AZURE_OPENAI_CHAT_DEPLOYMENT,
@@ -231,6 +231,45 @@ def directory_lookup(query: str) -> str:
     return directory.render_officials(query, matches)
 
 
+@tool
+def city_services_search(query: str) -> str:
+    """Look up Gloucester city-SERVICE info: trash, recycling, yard waste, compost, special/bulk/hazardous collections.
+
+    Use for how the city's PUBLISHED service pages describe routine operations:
+    trash & recycling collection rules, the holiday-shift schedule, yard-waste /
+    leaf weeks, the compost facility, special collections (Christmas trees,
+    household hazardous waste), and bulk-item / sticker rules. Covers the published
+    city-service information pages — NOT what was said or decided in a meeting
+    (that is doc_search), NOT meeting dates/times (schedule_lookup), and NOT the
+    staff directory (directory_lookup). Returns numbered source excerpts ([n]) to
+    cite, exactly like doc_search.
+
+    For LIVE operational status — a one-off suspension or delay, or "is recycling
+    running this week" — the ingested page text can lag reality: do not present it
+    as current ground truth; point the resident to the city website / AlertCenter
+    for the live status.
+
+    Args:
+        query: A free-text city-services question (e.g. "holiday trash schedule",
+            "yard waste pickup weeks", "household hazardous waste day").
+    """
+    chunks = city_services.search_city_services(query)
+    if not chunks:
+        # Deterministic empty signal — no fabricated sources. The agent may then
+        # fall back to doc_search (see TOOL_GUIDANCE) before declining.
+        return "No matching city-service pages were found for that search."
+
+    # Reuse doc_search's EXACT citation mechanism: append (n, chunk) pairs to the
+    # shared per-request state and advance the same running counter, so [n] numbers
+    # never collide when city_services_search and doc_search both fire in one turn.
+    state = _CITATION_STATE.get()
+    start = state["next_n"]
+    numbered = build_context(chunks, start=start)
+    state["pairs"].extend((start + i, c) for i, c in enumerate(chunks))
+    state["next_n"] = start + len(chunks)
+    return numbered
+
+
 # --- Router seam ------------------------------------------------------------
 # The tools the agent may call. ``doc_search`` answers "what was discussed /
 # decided" from indexed documents (SC + City Council); ``schedule_lookup``
@@ -239,7 +278,7 @@ def directory_lookup(query: str) -> str:
 # the published staff directory. Append future tools here — create_agent routes
 # to them automatically once registered. This is the single place new
 # capabilities plug in.
-TOOLS = [doc_search, schedule_lookup, directory_lookup]
+TOOLS = [doc_search, schedule_lookup, directory_lookup, city_services_search]
 
 
 # Tool-use guidance appended to the ported grounding rules. Routes between the two
@@ -297,11 +336,27 @@ TOOL_GUIDANCE = (
     "   link). If directory_lookup returns nothing, you MAY fall back to doc_search\n"
     "   for context before declining.\n"
     "\n"
-    "CITATIONS. Bracketed numbers like [1] or [2][3] are ONLY for doc_search\n"
-    "document sources. NEVER put a tool name in brackets — no [schedule_lookup],\n"
-    "no [directory_lookup], no [doc_search], no [toolname] of any kind. Schedule\n"
-    "and directory answers carry NO [n] markers; they use plain prose plus the\n"
-    "links above.\n"
+    "4) city_services_search — published CITY-SERVICE information pages. Route\n"
+    "   trash / recycling / yard waste / leaf collection / compost / special\n"
+    "   collections (Christmas trees, household hazardous waste) / bulk-item &\n"
+    "   sticker / holiday-collection-shift questions here. These are PUBLISHED\n"
+    "   service info pages — NOT meetings, schedules, or the staff directory: not\n"
+    "   what was said or decided at a meeting (doc_search), not meeting dates/times\n"
+    "   (schedule_lookup), not who holds a role (directory_lookup). It returns\n"
+    "   numbered [n] sources — cite them by number exactly like doc_search. If\n"
+    "   city_services_search returns nothing, you MAY fall back to doc_search for\n"
+    "   context before declining.\n"
+    "   LIVE-STATUS CAVEAT: for CURRENT operational status — a one-off suspension\n"
+    "   or delay, or 'is recycling running this week' — the ingested page text may\n"
+    "   LAG reality. Do NOT assert current operational status as ground truth:\n"
+    "   give what the page says (with its date if present) and point the resident\n"
+    "   to the city website / AlertCenter for live status.\n"
+    "\n"
+    "CITATIONS. Bracketed numbers like [1] or [2][3] tag doc_search AND\n"
+    "city_services_search sources — cite those by number. NEVER put a tool name in\n"
+    "brackets — no [schedule_lookup], no [directory_lookup], no [city_services_search],\n"
+    "no [doc_search], no [toolname] of any kind. Schedule and directory answers carry\n"
+    "NO [n] markers; they use plain prose plus the links above.\n"
     "\n"
     "SCOPE CROSS-CASE (important): the two rosters differ.\n"
     " - Conservation Commission: a CONTENT question ('what did they decide') must\n"

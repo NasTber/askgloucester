@@ -190,6 +190,11 @@ class Source(BaseModel):
     page_number: int | None = None
     source_url: str | None = None
     chunk_id: str | None = None
+    # Page/document title. Carried so the Sources panel can fall back to it for a
+    # header when a source has no meeting_body/document_date (city-services
+    # chunks). Documents have no title field (not indexed), so this stays None for
+    # them and their header is unchanged.
+    title: str | None = None
 
 
 class AskResponse(BaseModel):
@@ -217,6 +222,7 @@ def _to_source(chunk: dict, n: int) -> Source:
         page_number=chunk.get("page_number"),
         source_url=chunk.get("source_url"),
         chunk_id=chunk.get("chunk_id"),
+        title=chunk.get("title"),
     )
 
 
@@ -377,7 +383,8 @@ INDEX_HTML = """\
   <main id="thread">
     <div id="welcome" class="welcome">
       Ask what was discussed or decided at City Council and School Committee
-      meetings, or when any Gloucester public body meets.
+      meetings, when any Gloucester public body meets, who works in city
+      government, or about city services like trash and recycling.
     </div>
   </main>
 
@@ -414,7 +421,7 @@ INDEX_HTML = """\
 
     function srcLabel(s) {
       const p = [s.meeting_body, s.document_type, s.document_date].filter(Boolean);
-      let t = p.join(" \u2014 ") || "Source";
+      let t = p.join(" \u2014 ") || s.title || "Source";
       if (s.page_number != null) t += ", p." + s.page_number;
       return t;
     }
