@@ -63,14 +63,18 @@ from azure.search.documents.indexes.models import (
 # and get the same valid Azure-key coercion. chunker is Azure-free (tiktoken only).
 import chunker
 
-# Reuse the existing embedder (text-embedding-3-small, token-bucket pacing) and
-# the indexer's search-client construction (DefaultAzureCredential) + batched
-# upload + vector-config constants — pointed at our own index, not the docs one.
+# Reuse the existing embedder (text-embedding-3-small, token-bucket pacing), the
+# indexer's search-client construction (DefaultAzureCredential) + batched upload +
+# vector-config constants, and the processor's Document Intelligence OCR + durable
+# cache (for the brochure PDF) — all pointed at our own index, not the docs one.
 import embedder
 import indexer
+import processor
 
 # Reuse the scraper's browser User-Agent so requests look like a real browser
-# (some CivicPlus endpoints reject a bare client). Mirrors directory_source.
+# (some CivicPlus endpoints reject a bare client), AND its blob-upload idiom
+# (_blob_service_client, RAW_DOCUMENTS_CONTAINER, ContentSettings, _sanitize) for
+# the brochure PDF. Mirrors directory_source.
 import scraper
 
 logger = logging.getLogger(__name__)
@@ -327,6 +331,34 @@ def fetch_html_page(url: str, session: requests.Session | None = None) -> str:
     if response.status_code != 200:
         raise CityServiceFetchError(f"{url}: HTTP {response.status_code} (refusing to parse)")
     return response.text
+
+
+def fetch_pdf_bytes(url: str, session: requests.Session | None = None) -> bytes:
+    """Download a PDF target, gating on HTTP 200 AND real-PDF validation.
+
+    Same defensive spirit as :func:`fetch_html_page`: CivicPlus serves a full
+    themed HTML body for 404s, so a content-type check alone is not enough. We
+    reject any non-200 status, and additionally require the payload to actually BE
+    a PDF — accepted when the bytes start with the ``%PDF`` magic OR the
+    Content-Type is ``application/pdf``. A themed-404 HTML page (text/html, no
+    magic) is refused. Raises :class:`CityServiceFetchError` on non-200, non-PDF,
+    or transport error, so the caller can log-and-skip without crashing the run.
+    """
+    session = session or _new_session()
+    try:
+        response = session.get(url, allow_redirects=True, timeout=60)
+    except requests.RequestException as exc:
+        raise CityServiceFetchError(f"{url}: request failed: {exc}") from exc
+    if response.status_code != 200:
+        raise CityServiceFetchError(f"{url}: HTTP {response.status_code} (refusing to ingest)")
+    body = response.content
+    content_type = (response.headers.get("Content-Type") or "").lower()
+    looks_like_pdf = body[:5] == b"%PDF-" or "application/pdf" in content_type
+    if not looks_like_pdf:
+        raise CityServiceFetchError(
+            f"{url}: not a PDF (content-type={content_type!r}, first-bytes={body[:5]!r})"
+        )
+    return body
 
 
 def fetch_and_extract(
@@ -586,17 +618,100 @@ def ensure_city_services_index(index_name: str = CITY_SERVICES_INDEX_NAME) -> No
 
 
 # ---------------------------------------------------------------------------
-# Orchestrator (HTML pages only — PDF brochure is a later step)
+# PDF brochure branch (download → blob → OCR → chunk)
+# ---------------------------------------------------------------------------
+def _upload_pdf_blob(blob_name: str, pdf_bytes: bytes, target: CityServiceTarget) -> None:
+    """Upload a brochure PDF to the raw-documents container (mirrors scraper).
+
+    Uses a STABLE ``blob_name`` (derived from the target's constant label) so the
+    downstream OCR cache — keyed on ``blob_name`` — is stable across runs:
+    Document Intelligence runs once for this PDF and every later run is a cache
+    hit. Reuses scraper's blob-client + container + ContentSettings idiom.
+    """
+    container = scraper._blob_service_client().get_container_client(
+        scraper.RAW_DOCUMENTS_CONTAINER
+    )
+    # Provisioned by Bicep, but create-if-missing keeps a fresh account runnable.
+    try:
+        container.create_container()
+    except Exception:  # noqa: BLE001 - "already exists" is the common case
+        pass
+    metadata = {
+        "source_url": target.url,
+        "service_category": target.service_category,
+        # Blob metadata must be ASCII; the label already is, but stay defensive.
+        "title": target.label.encode("ascii", "ignore").decode("ascii"),
+    }
+    container.upload_blob(
+        name=blob_name,
+        data=pdf_bytes,
+        overwrite=True,
+        metadata=metadata,
+        content_settings=scraper.ContentSettings(content_type="application/pdf"),
+    )
+    logger.info("city_services: uploaded %s (%d bytes)", blob_name, len(pdf_bytes))
+
+
+def _pdf_target_chunks(
+    target: CityServiceTarget, session: requests.Session
+) -> list[CityServiceChunk]:
+    """Download → blob → OCR → chunk one PDF target. Returns [] on any skip.
+
+    Network download + PDF validation, then a stable-name blob upload, then OCR
+    via the shared :func:`processor.extract_text` (which carries the durable OCR
+    cache), then the SAME city-services chunking/prefix as the HTML path — only
+    the page-text source differs (OCR pages instead of one HTML body). A bad
+    download (non-200 / non-PDF) or an empty OCR result is logged and skipped so
+    one bad target can't sink the rebuild.
+    """
+    try:
+        pdf_bytes = fetch_pdf_bytes(target.url, session=session)
+    except CityServiceFetchError as exc:
+        logger.warning("city_services: skipping PDF %s: %s", target.url, exc)
+        return []
+
+    # Stable blob name → stable OCR cache key (scan once, cached forever).
+    blob_name = f"city-services/{scraper._sanitize(target.label)}.pdf"
+    _upload_pdf_blob(blob_name, pdf_bytes, target)
+
+    pages = processor.extract_text(blob_name)
+    if not pages:
+        logger.warning("city_services: no OCR text from PDF %s; skipping", target.url)
+        return []
+
+    # The PDF has no HTML <h1>; its label IS its title. Chunk per OCR page so each
+    # chunk carries its real page_number (HTML pages always used page_number=1).
+    chunks: list[CityServiceChunk] = []
+    for page in pages:
+        chunks.extend(
+            chunk_city_service_text(
+                page.text,
+                source_url=target.url,
+                title=target.label,
+                service_category=target.service_category,
+                label=target.label,
+                page_number=page.page_number,
+            )
+        )
+    logger.info(
+        "city_services: %s -> %d chunk(s) from %d OCR page(s)",
+        target.url, len(chunks), len(pages),
+    )
+    return chunks
+
+
+# ---------------------------------------------------------------------------
+# Orchestrator (HTML pages + brochure PDF)
 # ---------------------------------------------------------------------------
 def fetch_and_index_city_services(
     index_name: str = CITY_SERVICES_INDEX_NAME,
 ) -> int:
-    """Fetch + chunk + embed + (wipe-rebuild) index the HTML city-services pages.
+    """Fetch + chunk + embed + (wipe-rebuild) index the city-services sources.
 
-    Mirrors the calendar/directory orchestration shape. For each HTML target:
-    fetch → :class:`CityServicePage` → :func:`chunk_page` → collect chunks. Then
-    embed everything, wipe-and-rebuild the index, and upload. PDF targets are
-    skipped for now (their OCR path is Document Intelligence — a later step).
+    Mirrors the calendar/directory orchestration shape. HTML targets: fetch →
+    :class:`CityServicePage` → :func:`chunk_page`. PDF targets: download → blob →
+    OCR → chunk via :func:`_pdf_target_chunks`. All chunks join one list, then a
+    single pass embeds everything, wipe-and-rebuilds the index, and uploads.
 
     Returns the number of chunks indexed (0 if nothing was produced — in which
     case the existing index is left untouched rather than wiped to empty).
@@ -606,10 +721,9 @@ def fetch_and_index_city_services(
     all_chunks: list[CityServiceChunk] = []
     for target in TARGETS:
         if target.kind == "pdf":
-            # TODO(pdf step): download the brochure, run it through the existing
-            # Document Intelligence OCR path (processor.extract_text), then feed
-            # its page text to chunk_city_service_text(..., page_number=N).
-            logger.info("city_services: skipping PDF target (later step): %s", target.url)
+            # Brochure PDF: download → blob → OCR → chunk. Its chunks join the
+            # HTML chunks below before the single embed/wipe-rebuild/upload pass.
+            all_chunks.extend(_pdf_target_chunks(target, session))
             continue
         if target.kind != "html":
             logger.warning("city_services: unknown kind %r for %s; skipping", target.kind, target.url)
@@ -638,9 +752,9 @@ def fetch_and_index_city_services(
     ensure_city_services_index(index_name)
     indexed = indexer.upload_chunks(all_chunks, index_name=index_name)
     logger.info(
-        "city_services: %d chunk(s) from %d HTML target(s) indexed into '%s'",
+        "city_services: %d chunk(s) from %d target(s) indexed into '%s'",
         indexed,
-        sum(1 for t in TARGETS if t.kind == "html"),
+        len(TARGETS),
         index_name,
     )
     return indexed
