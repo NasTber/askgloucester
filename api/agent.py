@@ -29,7 +29,7 @@ from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.tools import tool
 from langchain_openai import AzureChatOpenAI
 
-from . import boards, calendar, city_services, directory
+from . import boards, calendar, city_services, directory, faq
 from .query import (
     AZURE_OPENAI_API_VERSION,
     AZURE_OPENAI_CHAT_DEPLOYMENT,
@@ -300,6 +300,48 @@ def city_services_search(query: str) -> str:
     return numbered
 
 
+@tool
+def faq_search(query: str) -> str:
+    """Search the city's published FAQ — quick answers to common resident questions.
+
+    The Gloucester FAQ has concise published answers to frequently-asked questions
+    across ANY department: assessing/abatements, retirement, veterans, legal,
+    police, fire, treasurer/parking tickets, city clerk, recycling, beach parking,
+    public works, conservation, and more. Use it for "how do I…", "where do I…",
+    "what do I need to…", "who do I call about…" questions — the quick published
+    answer.
+
+    COMPLEMENT, not competitor: faq_search gives the short published answer; the
+    domain tools still own depth — doc_search (what a body discussed/decided),
+    city_services_search (trash/permits/beach/harbor/clerk service pages),
+    directory_lookup (staff contacts), schedule_lookup (meeting times),
+    board_lookup (appointed members). You MAY call faq_search AND a domain tool for
+    the same question. Returns numbered [n] sources — cite them by number exactly
+    like doc_search. If faq_search returns nothing, fall back to the relevant
+    domain tool (or doc_search) before declining.
+
+    LIVE-STATUS CAVEAT (same as city services): some FAQ answers point to external
+    portals and are seasonal — beach-parking reservations/availability (Blinkay),
+    online filing, etc. Do NOT assert live availability or status; give the
+    published answer and point the resident to the city site / portal it names.
+
+    Args:
+        query: The resident's natural-language question.
+    """
+    chunks = faq.search_faq(query)
+    if not chunks:
+        return "No matching FAQ entries were found for that search."
+
+    # Reuse doc_search's EXACT citation mechanism (shared _CITATION_STATE + next_n)
+    # so [n] numbers never collide across tools in one turn.
+    state = _CITATION_STATE.get()
+    start = state["next_n"]
+    numbered = build_context(chunks, start=start)
+    state["pairs"].extend((start + i, c) for i, c in enumerate(chunks))
+    state["next_n"] = start + len(chunks)
+    return numbered
+
+
 # --- Router seam ------------------------------------------------------------
 # The tools the agent may call. ``doc_search`` answers "what was discussed /
 # decided" from indexed documents (SC + City Council); ``schedule_lookup``
@@ -308,7 +350,7 @@ def city_services_search(query: str) -> str:
 # the published staff directory. Append future tools here — create_agent routes
 # to them automatically once registered. This is the single place new
 # capabilities plug in.
-TOOLS = [doc_search, schedule_lookup, directory_lookup, city_services_search, board_lookup]
+TOOLS = [doc_search, schedule_lookup, directory_lookup, city_services_search, board_lookup, faq_search]
 
 
 # Tool-use guidance appended to the ported grounding rules. Routes between the two
@@ -367,7 +409,7 @@ TOOL_GUIDANCE = (
     "   for context before declining.\n"
     "\n"
     "4) city_services_search — published CITY-SERVICE information pages, covering\n"
-    "   TWO categories today:\n"
+    "   these categories today:\n"
     "   - Trash & recycling: trash / recycling / yard waste / leaf collection /\n"
     "     compost / special collections (Christmas trees, household hazardous\n"
     "     waste) / bulk-item & sticker / holiday-collection-shift questions.\n"
@@ -375,6 +417,13 @@ TOOL_GUIDANCE = (
     "     demolition permits, inspection requests, the building inspector's role,\n"
     "     building-inspector fees, how/where to file, and 'do I need a permit'\n"
     "     questions.\n"
+    "   - Beaches & parking: beach stickers/passes, beach parking and where to\n"
+    "     park at the beach, beach rules/dogs/lifeguard info, beach details.\n"
+    "   - Harbor & moorings: the harbormaster, the mooring wait list, launch\n"
+    "     service, and waterway/boating info.\n"
+    "   - City Clerk services: dog licenses, vital records and birth / death /\n"
+    "     marriage certificates, marriage intentions, business certificates (DBA),\n"
+    "     and notary services.\n"
     "   These are PUBLISHED service info pages — NOT meetings, schedules, or the\n"
     "   staff directory: not what was said or decided at a meeting (doc_search),\n"
     "   not meeting dates/times (schedule_lookup), not who holds a role\n"
@@ -392,6 +441,12 @@ TOOL_GUIDANCE = (
     "     point the resident to the city's Online Permitting page / portal (linked\n"
     "     from the cited page), and to AlertCenter for service alerts. Do not state\n"
     "     a permit's current status as fact.\n"
+    "   - Beaches / harbor / clerk: these pages give PROCESS and FEE info, but the\n"
+    "     LIVE transactions happen on external portals — live beach-parking\n"
+    "     availability/reservations (Blinkay), current mooring wait-list POSITION\n"
+    "     (Homeport), and online filing (e.g. dog-license/ViewPoint). Do NOT assert\n"
+    "     live parking availability or a caller's wait-list position; point them to\n"
+    "     the external portal linked from the cited page.\n"
     "\n"
     "5) board_lookup — APPOINTED board / commission / committee MEMBERS and their\n"
     "   TERMS. Route: who SITS ON or CHAIRS a board, when a member's TERM EXPIRES,\n"
@@ -410,12 +465,30 @@ TOOL_GUIDANCE = (
     "   defer those to doc_search. If board_lookup returns nothing, you MAY fall\n"
     "   back to doc_search for context before declining.\n"
     "\n"
-    "CITATIONS. Bracketed numbers like [1] or [2][3] tag doc_search AND\n"
-    "city_services_search sources — cite those by number. NEVER put a tool name in\n"
-    "brackets — no [schedule_lookup], no [directory_lookup], no [city_services_search],\n"
-    "no [board_lookup], no [doc_search], no [toolname] of any kind. Schedule,\n"
-    "directory, and board answers carry NO [n] markers; they use plain prose plus\n"
-    "the links above.\n"
+    "6) faq_search — the city's PUBLISHED FAQ: concise answers to common resident\n"
+    "   questions across ANY department (assessing/abatements, retirement, veterans,\n"
+    "   legal, police, fire, treasurer/parking tickets, clerk, recycling, beach\n"
+    "   parking, public works, conservation, …). Use it for quick 'how do I… /\n"
+    "   where do I… / what do I need to… / who do I call about…' questions. It is a\n"
+    "   COMPLEMENT, not a competitor: faq_search gives the short PUBLISHED answer;\n"
+    "   the domain tools own DEPTH — doc_search (what a body discussed/decided),\n"
+    "   city_services_search (service pages), directory_lookup (staff contacts),\n"
+    "   schedule_lookup (meeting times), board_lookup (appointed members). You MAY\n"
+    "   call faq_search AND a domain tool for the same question. It returns numbered\n"
+    "   [n] sources — cite them by number exactly like doc_search. If faq_search\n"
+    "   returns nothing, fall back to the relevant domain tool (or doc_search)\n"
+    "   before declining.\n"
+    "   LIVE-STATUS CAVEAT (same as city services): some FAQ answers point to\n"
+    "   external portals and are seasonal (beach-parking reservations/availability\n"
+    "   via Blinkay, online filing). Do NOT assert live availability or status —\n"
+    "   give the published answer and point the resident to the city site / portal.\n"
+    "\n"
+    "CITATIONS. Bracketed numbers like [1] or [2][3] tag doc_search,\n"
+    "city_services_search AND faq_search sources — cite those by number. NEVER put a\n"
+    "tool name in brackets — no [schedule_lookup], no [directory_lookup], no\n"
+    "[city_services_search], no [board_lookup], no [faq_search], no [doc_search], no\n"
+    "[toolname] of any kind. Schedule, directory, and board answers carry NO [n]\n"
+    "markers; they use plain prose plus the links above.\n"
     "\n"
     "SCOPE CROSS-CASE (important): the two rosters differ.\n"
     " - Conservation Commission: a CONTENT question ('what did they decide') must\n"

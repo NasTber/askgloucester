@@ -35,6 +35,7 @@ import city_services_source  # noqa: E402
 import directory_source  # noqa: E402
 import drive_source  # noqa: E402
 import embedder  # noqa: E402
+import faq_source  # noqa: E402
 import indexer  # noqa: E402
 import processor  # noqa: E402
 import scraper  # noqa: E402
@@ -104,6 +105,21 @@ def _run_boards_step() -> None:
         logger.exception("Boards ingestion failed (continuing with documents): %s", exc)
 
 
+def _run_faq_step() -> None:
+    """Independent source: rebuild the FAQ search index from the city's FAQ.
+
+    A sibling of the calendar/directory/city-services/boards steps. Wrapped in its
+    own try/except so an FAQ failure can NEVER break the document pipeline. Writes
+    ONLY to the dedicated ``gloucester-faq`` search index (wipe-and-rebuild) — it
+    does not touch the docs index, blob storage, or Document Intelligence.
+    """
+    try:
+        indexed = faq_source.fetch_and_index_faq()
+        logger.info("FAQ step complete: %d chunk(s) indexed", indexed)
+    except Exception as exc:  # noqa: BLE001 - never let FAQ break documents
+        logger.exception("FAQ ingestion failed (continuing with documents): %s", exc)
+
+
 def run(
     start_date: str,
     end_date: str,
@@ -121,6 +137,7 @@ def run(
         _run_directory_step()
         _run_city_services_step()
         _run_boards_step()
+        _run_faq_step()
 
     # Existence-only skip: pull the set of source_urls already in the index once,
     # up front, and hand it to both document sources so an already-indexed doc is

@@ -138,6 +138,72 @@ TARGETS: list[CityServiceTarget] = [
     # intentionally OMITTED — it is the dynamic filing app, not prose; its link
     # comes through inside the /895 Online-Permitting page text. /839 (bulk
     # permit-data CSV/Excel records) is also omitted — wrong shape for this parser.
+    #
+    # --- Beaches / parking (same fr-view content-page shape) ---
+    CityServiceTarget(
+        url="https://www.gloucester-ma.gov/299/Beach-Information",
+        kind="html",
+        service_category="beach",
+        label="Beach Information",
+    ),
+    CityServiceTarget(
+        url="https://www.gloucester-ma.gov/654/Beach-Sticker-Application",
+        kind="html",
+        service_category="beach",
+        label="Resident Beach Sticker Application",
+    ),
+    CityServiceTarget(
+        url="https://www.gloucester-ma.gov/1215/Gloucester-Beaches---Detailed-Informatio",
+        kind="html",
+        service_category="beach",
+        label="Gloucester Beaches — Detailed Information",
+    ),
+    # NB: the Blinkay/Yodel beach-parking reservation portal is OMITTED — a dynamic
+    # booking app, not prose; its link surfaces from the page text as a router link.
+    #
+    # --- Harbor / moorings (same fr-view content-page shape) ---
+    CityServiceTarget(
+        url="https://www.gloucester-ma.gov/174/Harbormaster",
+        kind="html",
+        service_category="harbor",
+        label="Harbormaster",
+    ),
+    CityServiceTarget(
+        url="https://www.gloucester-ma.gov/176/Mooring-Wait-List",
+        kind="html",
+        service_category="harbor",
+        label="Mooring Wait List",
+    ),
+    # NB: the Homeport/DOCKWA mooring portal is OMITTED — dynamic wait-list/booking
+    # app, not prose; its link surfaces from the page text as a router link.
+    #
+    # --- City Clerk services (same fr-view content-page shape) ---
+    CityServiceTarget(
+        url="https://www.gloucester-ma.gov/16/City-Clerk",
+        kind="html",
+        service_category="clerk",
+        label="City Clerk",
+    ),
+    CityServiceTarget(
+        url="https://www.gloucester-ma.gov/331/Dog-Licensing",
+        kind="html",
+        service_category="clerk",
+        label="Dog Licensing",
+    ),
+    CityServiceTarget(
+        url="https://www.gloucester-ma.gov/336/Vital-Records",
+        kind="html",
+        service_category="clerk",
+        label="Vital Records & Marriage Intentions",
+    ),
+    CityServiceTarget(
+        url="https://www.gloucester-ma.gov/330/Business-Certificates",
+        kind="html",
+        service_category="clerk",
+        label="Business Certificates",
+    ),
+    # NB: the ViewPoint Cloud dog-license filing app is OMITTED — dynamic filing
+    # portal, not prose; its link surfaces from the page text as a router link.
 ]
 
 
@@ -404,6 +470,9 @@ def fetch_and_extract(
 CATEGORY_DISPLAY: dict[str, str] = {
     "trash": "Trash & Recycling",
     "permits": "Permits & Inspections",
+    "beach": "Beaches & Parking",
+    "harbor": "Harbor & Moorings",
+    "clerk": "City Clerk Services",
 }
 
 # The leading marker of every city-services chunk prefix (used as a presence
