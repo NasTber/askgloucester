@@ -104,6 +104,8 @@ BODY_KEYWORDS = {
     "city council": "City Council",
     "school committee": "School Committee",
     "planning board": "Planning Board",
+    "conservation commission": "Conservation Commission",
+    "zoning board of appeals": "Zoning Board of Appeals",
 }
 
 

@@ -103,8 +103,9 @@ def doc_search(
     Args:
         query: A focused natural-language search query for the documents.
         body: The meeting body when the user named or clearly implied one. Must be
-            exactly one of "City Council", "School Committee", or "Planning Board".
-            Omit to search across all bodies.
+            exactly one of "City Council", "School Committee", "Planning Board",
+            "Conservation Commission", or "Zoning Board of Appeals". Omit to search
+            across all bodies.
         recency: Set recency=True ONLY for questions explicitly about the most
             recent / last / latest / upcoming meeting of a body (e.g. "what
             happened at the last City Council meeting", "when does the School
@@ -188,10 +189,10 @@ def schedule_lookup(
     Args:
         body: The public body, when the user named one. Must be on the city
             calendar roster: City Council, School Committee, Conservation
-            Commission, Council on Aging, Board of Assessors, Affordable Housing
-            Trust, Board of Registrars, Community Preservation, Fisheries
-            Commission, Licensing Board, or City-Owned Cemeteries Advisory
-            Committee. Omit to span every body.
+            Commission, Planning Board, Zoning Board of Appeals, Council on Aging,
+            Board of Assessors, Affordable Housing Trust, Board of Registrars,
+            Community Preservation, Fisheries Commission, Licensing Board, or
+            City-Owned Cemeteries Advisory Committee. Omit to span every body.
         start_date: Window start as YYYY-MM-DD. Omit for upcoming meetings (today).
             For "last / previous meeting" questions, pass a past date.
         end_date: Window end as YYYY-MM-DD. Omit to default to ~60 days out.
@@ -368,13 +369,15 @@ TOOL_GUIDANCE = (
     "   DOCUMENT ALLOWLIST: the ONLY bodies with indexed documents are\n"
     "     - School Committee\n"
     "     - City Council\n"
+    "     - Planning Board\n"
+    "     - Conservation Commission\n"
+    "     - Zoning Board of Appeals\n"
     "   For a content question about ANY other body (Parking Commission,\n"
-    "   Conservation Commission, Zoning Board of Appeals, Licensing Board,\n"
-    "   Planning Board, etc.) you MUST decline: say that body's documents are not\n"
-    "   indexed, and stop. Do NOT search on its behalf and NEVER substitute\n"
-    "   another body's documents (e.g. City Council parking ordinances are not an\n"
-    "   answer about the Parking Commission). Set body only for an allowlisted\n"
-    "   body; omit it to span both. Set recency=true (with body) ONLY for\n"
+    "   Licensing Board, Council on Aging, etc.) you MUST decline: say that body's\n"
+    "   documents are not indexed, and stop. Do NOT search on its behalf and NEVER\n"
+    "   substitute another body's documents (e.g. City Council parking ordinances\n"
+    "   are not an answer about the Parking Commission). Set body only for an\n"
+    "   allowlisted body; omit it to span all. Set recency=true (with body) ONLY for\n"
     "   'last / latest / most recent / next meeting' questions; leave it false for\n"
     "   topical/subject questions (a topic, project, budget, vote, or decision —\n"
     "   'what's the budget', 'the FY27 appropriations') even if recent docs seem\n"
@@ -387,7 +390,8 @@ TOOL_GUIDANCE = (
     "2) schedule_lookup — WHEN a body meets (dates/times: next, upcoming, past,\n"
     "   or 'what's on the schedule'). This uses the city's FULL calendar roster,\n"
     "   which is broader than the document allowlist: City Council, School\n"
-    "   Committee, Conservation Commission, Council on Aging, Board of Assessors,\n"
+    "   Committee, Conservation Commission, Planning Board,\n"
+    "   Zoning Board of Appeals, Council on Aging, Board of Assessors,\n"
     "   Affordable Housing Trust, Board of Registrars, Community Preservation,\n"
     "   Fisheries Commission, Licensing Board, City-Owned Cemeteries Advisory\n"
     "   Committee. Set body when one is named; omit to span all. Pass start_date/\n"
@@ -491,7 +495,7 @@ TOOL_GUIDANCE = (
     "markers; they use plain prose plus the links above.\n"
     "\n"
     "SCOPE CROSS-CASE (important): the two rosters differ.\n"
-    " - Conservation Commission: a CONTENT question ('what did they decide') must\n"
+    " - Licensing Board: a CONTENT question ('what did they decide') must\n"
     "   DECLINE (not in the document allowlist), but a SCHEDULE question ('when do\n"
     "   they meet') is ANSWERABLE via schedule_lookup.\n"
     " - A body on NEITHER the document allowlist NOR the calendar roster (e.g.\n"

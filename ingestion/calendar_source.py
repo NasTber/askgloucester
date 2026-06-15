@@ -104,11 +104,12 @@ def _canonical_body(name: str) -> str:
 # added/removed/renamed here.
 #
 # Excluded by omission: 14 (holidays), 20 (special events).
-# TODO: add the Planning Board CID here once it is discovered — do not block on it.
 CID_BODY: dict[int, str] = {
     23: _canonical_body("City Council"),
     65: _canonical_body("School Committee"),
     48: "Conservation Commission",
+    58: "Planning Board",
+    37: "Zoning Board of Appeals",
     24: "Council on Aging",
     25: "Board of Assessors",
     38: "Affordable Housing Trust",

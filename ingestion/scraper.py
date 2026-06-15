@@ -57,11 +57,21 @@ ARCHIVE_SOURCES: dict[int, tuple[str, str]] = {
     114: ("School Committee", "minutes"),
     35: ("City Council", "agenda"),
     36: ("City Council", "minutes"),
+    # NB: these archive AMIDs collide numerically with unrelated calendar CIDs
+    # (e.g. CID 47 = Community Preservation, CID 48 = Conservation Commission) —
+    # the AMID and CID number spaces are independent; do not cross-wire them.
+    57: ("Planning Board", "agenda"),
+    58: ("Planning Board", "minutes"),
+    47: ("Conservation Commission", "agenda"),
+    48: ("Conservation Commission", "minutes"),
+    41: ("Zoning Board of Appeals", "agenda"),
+    146: ("Zoning Board of Appeals", "minutes"),
+    42: ("Zoning Board of Appeals", "meeting results"),
 }
 
 # Out of the box, ingest School Committee agendas and minutes only, to keep the
 # initial test set small.
-DEFAULT_AMID_LIST: tuple[int, ...] = (113, 114, 35, 36)
+DEFAULT_AMID_LIST: tuple[int, ...] = (113, 114, 35, 36, 57, 58, 47, 48, 41, 146, 42)
 
 # Some CivicPlus deployments reject requests without a browser-like User-Agent,
 # returning an interstitial or 403 instead of the archive listing. Present one.

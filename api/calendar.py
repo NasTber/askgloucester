@@ -51,6 +51,8 @@ CALENDAR_BODIES: tuple[str, ...] = (
     "City Council",
     "School Committee",
     "Conservation Commission",
+    "Planning Board",
+    "Zoning Board of Appeals",
     "Council on Aging",
     "Board of Assessors",
     "Affordable Housing Trust",
