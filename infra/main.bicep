@@ -134,6 +134,7 @@ module containerApp 'modules/containerapp.bicep' = {
     identityClientId: identity.outputs.clientId
     githubActionsSpObjectId: githubActionsSpObjectId
     containerImage: containerImage
+    keyVaultEndpoint: keyVault.outputs.endpoint
     storageAccountName: storage.outputs.name
     rawDocumentsContainer: storage.outputs.containerName
     documentIntelligenceEndpoint: documentIntelligence.outputs.endpoint

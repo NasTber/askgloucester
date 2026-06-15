@@ -29,7 +29,7 @@ param boardsTableName string = 'boards'
 // Built-in role: Storage Blob Data Contributor
 var blobDataContributorRoleId = 'ba92f5b4-2d11-453d-a403-e96b0029c9fe'
 // Built-in role: Storage Table Data Reader (read-only access to Table Storage)
-var tableDataReaderRoleId = '76199698-9eea-407e-8d99-65c5e7c5d8b9'
+var tableDataReaderRoleId = '76199698-9eea-4c19-bc75-cec21354c6b6'
 
 resource storageAccount 'Microsoft.Storage/storageAccounts@2023-05-01' = {
   name: name
@@ -95,9 +95,6 @@ resource officialsTable 'Microsoft.Storage/storageAccounts/tableServices/tables@
 // `officials` declaration; runtime create_table_if_not_exists still keeps the
 // pipeline runnable on a fresh account. The account-scoped Storage Table Data
 // Reader assignment below already covers it — no extra RBAC.
-// DECLARED-NOT-APPLIED: pending the IaC reconciliation session — a main.bicep
-// apply still clobbers the www hostname binding until that is in Bicep, so this
-// declaration ships but is not deployed yet.
 resource boardsTable 'Microsoft.Storage/storageAccounts/tableServices/tables@2023-05-01' = {
   parent: tableService
   name: boardsTableName

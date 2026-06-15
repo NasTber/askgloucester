@@ -70,6 +70,9 @@ param openAiChatDeployment string
 @description('Azure OpenAI API version (AZURE_OPENAI_API_VERSION).')
 param openAiApiVersion string
 
+@description('Key Vault vault URI (ends with a trailing slash), used to build the Key Vault reference for the LangSmith API key secret. The UAMI must hold Key Vault Secrets User on this vault (granted in modules/keyvault.bicep).')
+param keyVaultEndpoint string
+
 // Built-in role: AcrPull
 var acrPullRoleId = '7f951dda-4ed3-4680-a7ca-43fe172d538d'
 // Built-in role: AcrPush — the CI/CD service principal pushes the API image.
@@ -108,6 +111,15 @@ resource managedEnvironment 'Microsoft.App/managedEnvironments@2024-03-01' = {
       }
     }
   }
+}
+
+// The managed certificate for www.askgloucester.com. It was provisioned out of
+// band (CNAME-validated by the operator) and its lifecycle is NOT owned by this
+// template — referenced as `existing` so the custom-domain binding below can
+// point at it without the deploy trying to (re)create or delete it.
+resource wwwManagedCertificate 'Microsoft.App/managedEnvironments/managedCertificates@2024-03-01' existing = {
+  parent: managedEnvironment
+  name: 'mc-cae-askglouces-www-askglouceste-1989'
 }
 
 // 3. Azure Container Registry. Admin user is disabled — the Container App pulls
@@ -174,7 +186,29 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
         targetPort: 8000
         transport: 'http'
         allowInsecure: false
+        // Custom-domain binding for www.askgloucester.com. SniEnabled means TLS
+        // is terminated using the managed certificate referenced above. This
+        // mirrors the live binding exactly so a deploy preserves it rather than
+        // stripping it (which would break TLS for the public site).
+        customDomains: [
+          {
+            name: 'www.askgloucester.com'
+            bindingType: 'SniEnabled'
+            certificateId: wwwManagedCertificate.id
+          }
+        ]
       }
+      // LangSmith API key, sourced from Key Vault (not stored inline). The
+      // Container App reads it with the user-assigned identity, which holds Key
+      // Vault Secrets User on the vault (modules/keyvault.bicep). The secret
+      // value itself must be seeded into the vault out of band.
+      secrets: [
+        {
+          name: 'langsmith-api-key'
+          keyVaultUrl: '${keyVaultEndpoint}secrets/langsmith-api-key'
+          identity: identityResourceId
+        }
+      ]
       // Identity-based pull from our ACR (no admin creds). Harmless while the
       // image still points at the public MCR placeholder; required once the
       // image moves to this registry.
@@ -211,11 +245,30 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
             // use, otherwise the managed-identity probe is ambiguous. This is an
             // identity binding, not app config — see report note.
             { name: 'AZURE_CLIENT_ID', value: identityClientId }
+            // LangSmith tracing for the agent. TRACING + PROJECT are plain
+            // config; the API key is a Key Vault-backed secret reference.
+            { name: 'LANGSMITH_TRACING', value: 'true' }
+            { name: 'LANGSMITH_PROJECT', value: 'askgloucester-prod' }
+            { name: 'LANGSMITH_API_KEY', secretRef: 'langsmith-api-key' }
           ]
           // Health probes. No readiness probe: /health is a liveness ping and
           // does NOT check Azure connectivity, so it wouldn't reflect true
           // readiness to serve traffic.
+          // Probe order matches the live Container App (Liveness, then Startup)
+          // so a deploy doesn't churn a new revision just to reorder the array.
           probes: [
+            {
+              // Liveness: once started, restart the container after 3 missed
+              // 30s checks.
+              type: 'Liveness'
+              httpGet: {
+                path: '/health'
+                port: 8000
+              }
+              initialDelaySeconds: 10
+              periodSeconds: 30
+              failureThreshold: 3
+            }
             {
               // Startup: tolerate the slow cold IMDS token acquisition we
               // observed. 10s delay + 30 failures x 10s = up to 300s before the
@@ -228,18 +281,6 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
               initialDelaySeconds: 10
               periodSeconds: 10
               failureThreshold: 30
-            }
-            {
-              // Liveness: once started, restart the container after 3 missed
-              // 30s checks.
-              type: 'Liveness'
-              httpGet: {
-                path: '/health'
-                port: 8000
-              }
-              initialDelaySeconds: 10
-              periodSeconds: 30
-              failureThreshold: 3
             }
           ]
         }
