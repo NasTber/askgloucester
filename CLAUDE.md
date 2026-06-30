@@ -4,7 +4,7 @@ Context primer for Claude Code. Keep this current; it is the single source of tr
 
 ## What this is
 
-AskGloucester is a civic AI assistant for Gloucester, MA. It answers questions about municipal **meeting documents** (School Committee + City Council agendas and minutes) and **meeting schedules** (a city-wide calendar), using a tool-using RAG agent on Azure. It runs on a **personal** Azure subscription (not a work tenant) and doubles as hands-on AZ-305 preparation (AZ-900 and AI-900 already done). Live at **https://www.askgloucester.com**.
+AskGloucester is a civic AI assistant for Gloucester, MA. It answers questions about municipal **meeting documents** (agendas and minutes for School Committee, City Council, Planning Board, Conservation Commission, and Zoning Board of Appeals) and **meeting schedules** (a city-wide calendar), using a tool-using RAG agent on Azure. It runs on a **personal** Azure subscription (not a work tenant) and doubles as hands-on AZ-305 preparation (AZ-900 and AI-900 already done). Live at **https://www.askgloucester.com**.
 
 ## Working agreement (read this first)
 
@@ -27,7 +27,7 @@ AskGloucester is a civic AI assistant for Gloucester, MA. It answers questions a
 
 **RAG / agent** (`api/agent.py`, LangChain `create_agent` / LangGraph, `temperature=0`):
 - `TOOLS = [doc_search, schedule_lookup]` — the **router seam**; each new data source is a new tool, not a re-migration.
-- `doc_search`: hybrid (BM25 + vector, RRF) over AI Search with OData filters (`meeting_body`, `meeting_category`, date). Body **allowlist** (School Committee + City Council); off-allowlist bodies get a structural decline inside the tool.
+- `doc_search`: hybrid (BM25 + vector, RRF) over AI Search with OData filters (`meeting_body`, `meeting_category`, date). Body **allowlist** — five bodies with indexed documents: School Committee, City Council, Planning Board, Conservation Commission, Zoning Board of Appeals (single source of truth: `BODY_KEYWORDS` in `api/query.py`, reused by `api/agent.py`). Off-allowlist bodies get a structural decline inside the tool. (Planning Board is allowlisted but may be empty in-window pending its calendar CID.)
 - `schedule_lookup`: api-local, read-only `events` Table reader (11-body roster). Returns prose with inline calendar links — NO `[n]` citation channel. (It must NOT import `ingestion/` — the image ships `api/` only.)
 - Citations: per-request `_CITATION_STATE` ContextVar; `ask()` keeps only chunks whose `[n]` appears in the final answer, preserving original numbers.
 - Memory: stateless / client-carried. `POST /ask {question, history[]}` reconstructs messages each call.
@@ -48,7 +48,7 @@ AskGloucester is a civic AI assistant for Gloucester, MA. It answers questions a
 
 Index fields: `id, content, source_url, document_date, meeting_body, document_type, page_number, chunk_id, meeting_category, content_vector`. `title` is NOT indexed (blob metadata only). `document_date` is String ISO `YYYY-MM-DD` (sortable + filterable, not facetable).
 
-Data sources (AMIDs): 35 City Council agendas ✅, 36 City Council minutes ✅, 113 School Committee agendas ✅, 114 School Committee minutes ❌ DEAD (1 doc, 2019). NB: 114 is still in the scraper's `DEFAULT_AMID_LIST = (113, 114, 35, 36)` — it is requested every run but yields nothing in-window, so real SC minutes come from the public Drive folder instead. `meeting_category` (`full_committee` / `subcommittee` / `negotiations`) is derived from the title at ingest (`classify_meeting_category`; "negotiat" outranks "subcommittee", else `full_committee`).
+Data sources (AMIDs): 35 City Council agendas ✅, 36 City Council minutes ✅, 113 School Committee agendas ✅, 114 School Committee minutes ❌ DEAD (1 doc, 2019); plus the expanded bodies — 57/58 Planning Board agendas/minutes, 47/48 Conservation Commission agendas/minutes, 41/146 Zoning Board of Appeals agendas/minutes, 42 ZBA "meeting results". NB: 114 is still in the scraper's `DEFAULT_AMID_LIST = (113, 114, 35, 36, 57, 58, 47, 48, 41, 146, 42)` — it is requested every run but yields nothing in-window, so real SC minutes come from the public Drive folder instead. (The AMID→body/type map lives in `ARCHIVE_SOURCES` in `scraper.py`; AMID and calendar CID number spaces are independent — do not cross-wire them.) `meeting_category` (`full_committee` / `subcommittee` / `negotiations`) is derived from the title at ingest (`classify_meeting_category`; "negotiat" outranks "subcommittee", else `full_committee`).
 
 ## Identity (don't mix these up)
 
@@ -130,7 +130,7 @@ askgloucester/
 │                 # which main.bicep references before the next infra change.)
 ├── ingestion/
 │   ├── utils.py            # classify_meeting_category
-│   ├── scraper.py          # Archive.aspx; DEFAULT_AMID_LIST = (113, 114, 35, 36); existence-only skip
+│   ├── scraper.py          # Archive.aspx; DEFAULT_AMID_LIST = (113, 114, 35, 36, 57, 58, 47, 48, 41, 146, 42); existence-only skip
 │   ├── processor.py
 │   ├── chunker.py          # 500-token/50-overlap chunks; metadata prefix on every chunk
 │   ├── embedder.py         # token-bucket pacing
