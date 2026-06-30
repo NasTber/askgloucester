@@ -101,7 +101,10 @@ SYSTEM_PROMPT = (
     "   - Plain text only — do NOT use Markdown (**bold**, #headings, or tables); it renders\n"
     "     as literal characters. Blank lines and \"• \" bullets are the only formatting the\n"
     "     interface displays.\n"
-    "   - Keep each [n] citation immediately after the claim it supports.\n"
+    "   - Place each [n] marker right after the specific sentence or clause it supports.\n"
+    "     Do NOT gather citations into a block at the end of a paragraph or at the end of\n"
+    "     the answer — a trailing run like \"[1][2][3][4]\" is wrong. Distribute the markers\n"
+    "     inline so each fact carries its own source.\n"
     "   - Be concise but complete: synthesize across the sources into a genuinely useful\n"
     "     summary, not a terse one-liner or a wall of quotes."
 )
