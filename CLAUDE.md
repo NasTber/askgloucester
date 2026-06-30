@@ -4,7 +4,7 @@ Context primer for Claude Code. Keep this current; it is the single source of tr
 
 ## What this is
 
-AskGloucester is a civic AI assistant for Gloucester, MA. It answers questions about municipal **meeting documents** (agendas and minutes for School Committee, City Council, Planning Board, Conservation Commission, and Zoning Board of Appeals) and **meeting schedules** (a city-wide calendar), using a tool-using RAG agent on Azure. It runs on a **personal** Azure subscription (not a work tenant) and doubles as hands-on AZ-305 preparation (AZ-900 and AI-900 already done). Live at **https://www.askgloucester.com**.
+AskGloucester is a civic AI assistant for Gloucester, MA. It answers questions about municipal **meeting documents** (agendas and minutes for School Committee, City Council, Planning Board, Conservation Commission, and Zoning Board of Appeals), **meeting schedules** (a city-wide calendar), and other published city info — the **staff directory**, **appointed board/commission rosters**, **city-service pages** (trash, permits, beaches, harbor, clerk), and the city **FAQ** — using a tool-using RAG agent on Azure (six tools; see RAG / agent below). It runs on a **personal** Azure subscription (not a work tenant) and doubles as hands-on AZ-305 preparation (AZ-900 and AI-900 already done). Live at **https://www.askgloucester.com**.
 
 ## Working agreement (read this first)
 
@@ -26,10 +26,14 @@ AskGloucester is a civic AI assistant for Gloucester, MA. It answers questions a
 - Auth: `DefaultAzureCredential` throughout (Azure CLI cred locally, UAMI in the container).
 
 **RAG / agent** (`api/agent.py`, LangChain `create_agent` / LangGraph, `temperature=0`):
-- `TOOLS = [doc_search, schedule_lookup]` — the **router seam**; each new data source is a new tool, not a re-migration.
-- `doc_search`: hybrid (BM25 + vector, RRF) over AI Search with OData filters (`meeting_body`, `meeting_category`, date). Body **allowlist** — five bodies with indexed documents: School Committee, City Council, Planning Board, Conservation Commission, Zoning Board of Appeals (single source of truth: `BODY_KEYWORDS` in `api/query.py`, reused by `api/agent.py`). Off-allowlist bodies get a structural decline inside the tool. (Planning Board is allowlisted but may be empty in-window pending its calendar CID.)
-- `schedule_lookup`: api-local, read-only `events` Table reader (11-body roster). Returns prose with inline calendar links — NO `[n]` citation channel. (It must NOT import `ingestion/` — the image ships `api/` only.)
-- Citations: per-request `_CITATION_STATE` ContextVar; `ask()` keeps only chunks whose `[n]` appears in the final answer, preserving original numbers.
+- `TOOLS = [doc_search, schedule_lookup, directory_lookup, city_services_search, board_lookup, faq_search]` — the **router seam**; each new data source is a new tool, not a re-migration. `TOOL_GUIDANCE` (appended to the system prompt) routes between them by intent/scope. Each api-local tool module reads its own backing store DIRECTLY over `DefaultAzureCredential` and must NOT import `ingestion/` (the image ships `api/` only — importing ingestion crash-loops the container); the matching `ingestion/*_source.py` owns writes.
+- `doc_search`: hybrid (BM25 + vector, RRF) over the `gloucester-documents` AI Search index with OData filters (`meeting_body`, `meeting_category`, date). Body **allowlist** — five bodies with indexed documents: School Committee, City Council, Planning Board, Conservation Commission, Zoning Board of Appeals (single source of truth: `BODY_KEYWORDS` in `api/query.py`, reused by `api/agent.py`). Off-allowlist bodies get a structural decline inside the tool. (Planning Board is allowlisted but may be empty in-window pending its calendar CID.)
+- `schedule_lookup` (`api/calendar.py`): api-local, read-only `events` Table reader (roster of bodies). Returns prose with inline calendar links — NO `[n]` citation channel.
+- `directory_lookup` (`api/directory.py`): read-only `officials` Table — current city STAFF identity/contact. Prose, NO `[n]`.
+- `board_lookup` (`api/boards.py`): read-only `boards` Table — APPOINTED board/commission members + term dates (PERSON rows + `__board__` summary rows). Prose, NO `[n]`.
+- `city_services_search` (`api/city_services.py`): hybrid search over the `gloucester-city-services` index — published service pages (trash/recycling, permits, beaches/parking, harbor/moorings, clerk services). Returns `[n]` sources.
+- `faq_search` (`api/faq.py`): hybrid search over the `gloucester-faq` index — concise published FAQ answers across any department. Returns `[n]` sources.
+- Citations: `doc_search`, `city_services_search`, and `faq_search` share ONE per-request `_CITATION_STATE` ContextVar + running `next_n` counter, so `[n]` numbers never collide across tools in a turn. `ask()` keeps only chunks whose `[n]` appears in the final answer, preserving original numbers. The Table-backed tools (schedule/directory/board) are prose-only — no `[n]` channel.
 - Memory: stateless / client-carried. `POST /ask {question, history[]}` reconstructs messages each call.
 
 **API** (`api/main.py`, FastAPI): `GET /` (inline chat UI), `POST /ask {question, history[]} → {answer, sources[]}`, `GET /health` (lazy, never touches Azure).
@@ -81,7 +85,7 @@ python run_pipeline.py --start-date 2026-01-01 --end-date 2026-12-31 --meeting-b
 
 ## CI/CD (GitHub Actions, OIDC — no stored secrets)
 
-- `deploy-app.yml`: push to `main` on paths `api/**`, `ingestion/**`, `Dockerfile`, `.dockerignore` → docker build `--platform linux/amd64` → push ACR → `az containerapp update`. (Note: `ingestion/**` triggers a harmless no-op deploy since the image ships `api/` only — tightening this path filter is a low-priority cleanup.)
+- `deploy-app.yml`: push to `main` on paths `api/**`, `Dockerfile`, `.dockerignore` → docker build `--platform linux/amd64` → push ACR → `az containerapp update`. (`ingestion/**` is intentionally NOT a trigger — the image ships `api/` only, so ingestion changes can't alter the deployed image; `ingest.yml` checks out fresh each run so ingestion code is never stale regardless.)
 - `ingest.yml`: cron Mondays 09:00 UTC + `workflow_dispatch` → `run_pipeline.py … --meeting-body all`.
 - Actions pinned to Node 24 runtime (`checkout@v6`, `setup-python@v6`, `azure/login@v3`).
 - `CLAUDE.md` and other root files do NOT trigger a deploy (not in any path filter).
@@ -137,11 +141,19 @@ askgloucester/
 │   ├── indexer.py          # ensure_index = create-if-not-exists; index field schema lives here
 │   ├── drive_source.py     # SC minutes via gdown; existence-only skip
 │   ├── calendar_source.py  # per-CID iCal → events Table; CANCEL/RESCHEDUL status derivation
+│   ├── directory_source.py # writes the officials Table (staff directory)
+│   ├── boards_source.py    # writes the boards Table (appointments: PERSON + __board__ rows)
+│   ├── city_services_source.py  # wipe-and-rebuild of the gloucester-city-services index
+│   ├── faq_source.py       # wipe-and-rebuild of the gloucester-faq index
 │   └── requirements.txt
 ├── api/
 │   ├── __init__.py
-│   ├── agent.py            # create_agent; doc_search + schedule_lookup; TOOL_GUIDANCE; recency + grounding rules
-│   ├── calendar.py         # api-local read-only events Table reader
+│   ├── agent.py            # create_agent; 6 tools + TOOL_GUIDANCE; recency + grounding rules
+│   ├── calendar.py         # api-local read-only events Table reader (schedule_lookup)
+│   ├── directory.py        # api-local read-only officials Table reader (directory_lookup)
+│   ├── boards.py           # api-local read-only boards Table reader (board_lookup)
+│   ├── city_services.py    # api-local hybrid search over gloucester-city-services (city_services_search)
+│   ├── faq.py              # api-local hybrid search over gloucester-faq (faq_search)
 │   ├── query.py            # SYSTEM_PROMPT + thin delegator to agent.ask
 │   ├── main.py             # FastAPI; chat UI; security headers + nonce CSP; rate limit; input caps
 │   ├── routes/.gitkeep     # empty placeholder dir

@@ -1,7 +1,9 @@
 # Build the AskGloucester API image and roll the Container App to it.
 #
-# Triggers only when the app's build inputs change (the API/ingestion source,
-# the Dockerfile, or the .dockerignore). Auth is keyless via GitHub OIDC ->
+# Triggers only when the app's build inputs change (the API source, the
+# Dockerfile, or the .dockerignore). `ingestion/**` is intentionally NOT a
+# trigger: the image ships `api/` only (see Dockerfile), so ingestion changes
+# can't alter what gets deployed. Auth is keyless via GitHub OIDC ->
 # Azure federated credential; the GitHub Actions service principal holds AcrPush
 # on the registry and Contributor on the Container App (granted by main.bicep).
 name: deploy-app
@@ -11,7 +13,6 @@ on:
     branches: [main]
     paths:
       - api/**
-      - ingestion/**
       - Dockerfile
       - .dockerignore
 
