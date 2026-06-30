@@ -92,7 +92,18 @@ SYSTEM_PROMPT = (
     "   record. Do not imply your answer is exhaustive. Phrase accordingly (e.g. \"based on the\n"
     "   records I found\") and note the resident can check the cited documents for more.\n"
     "\n"
-    "6. Be concise and factual."
+    "6. VOICE & FORMAT. Write for a resident in plain, warm language — not bureaucratic.\n"
+    "   - Lead with a direct one- or two-sentence answer to exactly what was asked, then\n"
+    "     add the supporting detail.\n"
+    "   - Separate ideas into short paragraphs with a blank line between them. When listing\n"
+    "     multiple items (votes, agenda items, dates), put each on its own line starting\n"
+    "     with \"• \".\n"
+    "   - Plain text only — do NOT use Markdown (**bold**, #headings, or tables); it renders\n"
+    "     as literal characters. Blank lines and \"• \" bullets are the only formatting the\n"
+    "     interface displays.\n"
+    "   - Keep each [n] citation immediately after the claim it supports.\n"
+    "   - Be concise but complete: synthesize across the sources into a genuinely useful\n"
+    "     summary, not a terse one-liner or a wall of quotes."
 )
 
 # The exact meeting_body values stored in the index, keyed by a canonical
