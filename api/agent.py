@@ -52,10 +52,15 @@ from .query import (
 # to infer intent (the agent decides whether a body applies).
 _CANONICAL_BODIES = {body.lower(): body for body in BODY_KEYWORDS.values()}
 
-# Per-request citation accumulator. doc_search appends (n, chunk) pairs and bumps
-# the running counter so a SECOND tool call continues numbering ([11], [12], ...)
-# instead of colliding at [1]. ask() sets a fresh dict at the start of every
-# request, so concurrent requests never share state.
+# Per-request citation accumulator, shared by every [n]-emitting tool
+# (doc_search, city_services_search, faq_search) through _cite. It holds:
+#   "pairs"    — one (n, chunk) representative per distinct source, in first-seen
+#                order; these become the Sources rows.
+#   "next_n"   — the running counter, so a later tool call continues at [k+1]
+#                instead of colliding back at [1].
+#   "url_to_n" — source_url -> assigned [n], so every chunk of one PDF (dozens of
+#                page-chunks) SHARES one citation number and one Sources row.
+# ask() sets a fresh dict per request, so concurrent requests never share state.
 _CITATION_STATE: contextvars.ContextVar[dict] = contextvars.ContextVar("citation_state")
 
 
@@ -85,6 +90,34 @@ def _normalize_date(value: str | None) -> str | None:
         return date.fromisoformat(value.strip()).isoformat()
     except ValueError:
         return None
+
+
+def _cite(chunks: list[dict]) -> str:
+    """Number chunks by DISTINCT source_url, register them, return the context block.
+
+    The single citation seam for every [n]-emitting tool. Chunks that share a
+    source_url (e.g. many page-chunks of one PDF) collapse to ONE ``[n]`` and ONE
+    Sources row: the first chunk seen for a url is its representative and claims
+    the next number; later chunks of that url reuse it. The url->n map lives in
+    the shared per-request ``_CITATION_STATE``, so numbering stays stable and
+    collision-free across every tool call in the turn (a doc cited by two searches
+    keeps one number). A chunk with no source_url can't be deduped or linked, so
+    it always takes a fresh number rather than merging with other sourceless ones.
+    """
+    state = _CITATION_STATE.get()
+    url_to_n = state["url_to_n"]
+    numbered: list[tuple[int, dict]] = []
+    for c in chunks:
+        url = c.get("source_url") or ""
+        n = url_to_n.get(url) if url else None
+        if n is None:
+            n = state["next_n"]
+            state["next_n"] = n + 1
+            state["pairs"].append((n, c))  # first chunk of a source = its Sources row
+            if url:
+                url_to_n[url] = n
+        numbered.append((n, c))
+    return build_context(numbered)
 
 
 @tool(response_format="content_and_artifact")
@@ -125,8 +158,6 @@ def doc_search(
             content is date-prefixed (e.g. "City Council agenda — June 9, 2026
             (2026-06-09) ..."), so "June" and date words match in hybrid search.
     """
-    state = _CITATION_STATE.get()
-
     # --- Deterministic, server-side filter construction ---------------------
     # Every OData clause is built from a validated constant, never from raw LLM
     # text: body is normalized to a canonical constant, target_date is validated
@@ -163,14 +194,10 @@ def doc_search(
         # Deterministic empty signal — no fabricated sources.
         return ("No matching documents were found for that search.", [])
 
-    # --- Global, stable [n] numbering across tool calls ---------------------
-    start = state["next_n"]
-    numbered = build_context(chunks, start=start)
-    state["pairs"].extend((start + i, c) for i, c in enumerate(chunks))
-    state["next_n"] = start + len(chunks)
-
-    # content (what the model reads + cites) , artifact (raw chunks for callers)
-    return numbered, chunks
+    # Number by distinct source_url and register in the shared per-request state
+    # (see _cite), then return content (what the model reads + cites) alongside
+    # the artifact (raw chunks for callers).
+    return _cite(chunks), chunks
 
 
 @tool
@@ -290,15 +317,10 @@ def city_services_search(query: str) -> str:
         # fall back to doc_search (see TOOL_GUIDANCE) before declining.
         return "No matching city-service pages were found for that search."
 
-    # Reuse doc_search's EXACT citation mechanism: append (n, chunk) pairs to the
-    # shared per-request state and advance the same running counter, so [n] numbers
-    # never collide when city_services_search and doc_search both fire in one turn.
-    state = _CITATION_STATE.get()
-    start = state["next_n"]
-    numbered = build_context(chunks, start=start)
-    state["pairs"].extend((start + i, c) for i, c in enumerate(chunks))
-    state["next_n"] = start + len(chunks)
-    return numbered
+    # Reuse doc_search's EXACT citation mechanism (_cite): one [n] per distinct
+    # source_url, registered in the shared per-request state, so numbers never
+    # collide when city_services_search and doc_search both fire in one turn.
+    return _cite(chunks)
 
 
 @tool
@@ -333,14 +355,9 @@ def faq_search(query: str) -> str:
     if not chunks:
         return "No matching FAQ entries were found for that search."
 
-    # Reuse doc_search's EXACT citation mechanism (shared _CITATION_STATE + next_n)
-    # so [n] numbers never collide across tools in one turn.
-    state = _CITATION_STATE.get()
-    start = state["next_n"]
-    numbered = build_context(chunks, start=start)
-    state["pairs"].extend((start + i, c) for i, c in enumerate(chunks))
-    state["next_n"] = start + len(chunks)
-    return numbered
+    # Reuse doc_search's EXACT citation mechanism (_cite): shared _CITATION_STATE
+    # + one [n] per distinct source_url, so numbers never collide across tools.
+    return _cite(chunks)
 
 
 # --- Router seam ------------------------------------------------------------
@@ -583,7 +600,7 @@ def ask(
     implementation gave its callers.
     """
     # Fresh per-request citation state (replaces the old retrieval-order list).
-    _CITATION_STATE.set({"pairs": [], "next_n": 1})
+    _CITATION_STATE.set({"pairs": [], "next_n": 1, "url_to_n": {}})
 
     messages = _to_messages(history) + [HumanMessage(question)]
     # thread_id is unused without a checkpointer, but wiring it now means adding

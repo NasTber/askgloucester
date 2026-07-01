@@ -283,17 +283,19 @@ def retrieve(
     return [dict(r) for r in results]
 
 
-def build_context(chunks: list[dict], start: int = 1) -> str:
-    """Assemble retrieved chunks into a numbered, grounded source block.
+def build_context(numbered_chunks: list[tuple[int, dict]]) -> str:
+    """Assemble already-numbered chunks into a grounded source block.
 
-    Each chunk becomes one numbered source. The numbering ([1], [2], ...)
-    follows the chunk order and is what the model is told to cite. ``start`` lets
-    a caller continue the numbering across multiple retrieval calls — the agent's
-    ``doc_search`` tool passes a running offset so a second search produces
-    ``[11], [12], ...`` instead of colliding back at ``[1]``.
+    Each chunk is rendered under its caller-assigned ``[n]``. Numbering is NOT
+    decided here: the agent's citation layer (``api.agent._cite``) assigns one
+    ``[n]`` per DISTINCT ``source_url``, so several chunks (different pages of one
+    PDF) may arrive carrying the SAME ``n`` — this function just formats what it
+    is given. The per-excerpt page number is shown so the model can still
+    attribute a claim to the right passage when one ``[n]`` spans several
+    page-chunks of the same document.
     """
     blocks = []
-    for i, c in enumerate(chunks, start=start):
+    for n, c in numbered_chunks:
         # A short provenance header helps the model attribute claims correctly.
         header_bits = [
             c.get("meeting_body"),
@@ -301,10 +303,12 @@ def build_context(chunks: list[dict], start: int = 1) -> str:
             c.get("document_date"),
         ]
         header = " — ".join(b for b in header_bits if b)
+        page = c.get("page_number")
+        page_str = f" (p.{page})" if page is not None else ""
         source_url = c.get("source_url", "")
         content = (c.get("content") or "").strip()
         blocks.append(
-            f"[{i}] {header}\n"
+            f"[{n}] {header}{page_str}\n"
             f"Source URL: {source_url}\n"
             f"{content}"
         )

@@ -33,7 +33,7 @@ AskGloucester is a civic AI assistant for Gloucester, MA. It answers questions a
 - `board_lookup` (`api/boards.py`): read-only `boards` Table — APPOINTED board/commission members + term dates (PERSON rows + `__board__` summary rows). Prose, NO `[n]`.
 - `city_services_search` (`api/city_services.py`): hybrid search over the `gloucester-city-services` index — published service pages (trash/recycling, permits, beaches/parking, harbor/moorings, clerk services). Returns `[n]` sources.
 - `faq_search` (`api/faq.py`): hybrid search over the `gloucester-faq` index — concise published FAQ answers across any department. Returns `[n]` sources.
-- Citations: `doc_search`, `city_services_search`, and `faq_search` share ONE per-request `_CITATION_STATE` ContextVar + running `next_n` counter, so `[n]` numbers never collide across tools in a turn. `ask()` keeps only chunks whose `[n]` appears in the final answer, preserving original numbers. The Table-backed tools (schedule/directory/board) are prose-only — no `[n]` channel.
+- Citations: `doc_search`, `city_services_search`, and `faq_search` share ONE per-request `_CITATION_STATE` ContextVar (`pairs` + running `next_n` + `url_to_n` map) through the `_cite` helper (`api/agent.py`), so `[n]` numbers never collide across tools in a turn. **Dedup-by-source:** `_cite` assigns one `[n]` per DISTINCT `source_url`, so every page-chunk of one PDF shares ONE citation number and ONE Sources row (a doc cited by two searches keeps its number); the model still sees each excerpt with its page. `build_context` is now a pure formatter over pre-numbered `(n, chunk)` pairs — numbering lives only in `_cite`. `ask()` keeps only chunks whose `[n]` appears in the final answer. The Table-backed tools (schedule/directory/board) are prose-only — no `[n]` channel.
 - Memory: stateless / client-carried. `POST /ask {question, history[]}` reconstructs messages each call.
 
 **API** (`api/main.py`, FastAPI): `GET /` (inline chat UI), `POST /ask {question, history[]} → {answer, sources[]}`, `GET /health` (lazy, never touches Azure).
@@ -115,7 +115,6 @@ python run_pipeline.py --start-date 2026-01-01 --end-date 2026-12-31 --meeting-b
 ## Known issues / parked
 
 - **IaC reconciliation (landmine).** The `www` hostname binding and several RBAC assignments live OUTSIDE Bicep, so any `main.bicep` apply wipes them and breaks the live site. Put them in Bicep (idempotent) before the next infra deploy. App deploys (`deploy-app.yml`) do NOT trip this.
-- **Citation dedup-by-source.** Citations are numbered per *chunk*, so one PDF (chunked into dozens) surfaces as dozens of `[n]` chips. Fix = number by distinct `source_url` so chunks of a doc share one citation + one Sources row. Parked as cosmetic.
 - **Working-tree WIP.** Keep `CLAUDE.md` and `scripts/` committed or discarded — main↔local skew has caused a deploy failure before.
 - **Historical data = 2026 only.** Backfill (SC Drive 2020–2025, City Council back to 2009) is gated on the Microsoft Founders Hub application (Nas-owned) to avoid embedding cost at scale.
 - Calendar launch gates: confirm the exact `CANCELLED` token against a real cancelled event; find the Planning Board CID.
